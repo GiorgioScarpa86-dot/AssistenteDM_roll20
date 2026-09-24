@@ -128,9 +128,10 @@ P.innerHTML = `
         <button class="adm-btn danger" id="st-canc">🗑</button>
       </div>
       <div id="st-stat" class="adm-hint"></div>
-      <p class="adm-hint" style="border:1px dashed rgba(84,194,136,.35);border-radius:7px;padding:6px 8px">🔒 La chiave resta solo nel browser (memoria di Tampermonkey). Viene inviata solo al provider che scegli tu, quando premi un bottone di generazione.</p>
+      <p class="adm-hint" style="border:1px dashed rgba(84,194,136,.35);border-radius:7px;padding:6px 8px">🔒 La chiave è salvata nel localStorage del browser per roll20.net (se non disponibile, nella memoria Tampermonkey). Altri script attivi sulla stessa pagina potrebbero leggerla: usa una chiave dedicata con limiti di spesa. Viene inviata al provider scelto solo quando testi la connessione o generi con LLM.</p>
       <p class="adm-hint">Fonte mostri: <span id="st-fonte">—</span> · SRD 5.1 (OGL 1.0a)</p>
       <div class="adm-row"><button class="adm-btn" id="st-ricarica">🔄 Ricarica dati mostri</button></div>
+      <div class="adm-row"><button class="adm-btn danger" id="st-reset">⚠️ Azzera dati salvati della campagna</button></div>
     </div>
 
     <div class="adm-toast" id="adm-toast"></div>
@@ -146,6 +147,22 @@ function toast(msg){
   clearTimeout(toastT);
   toastT = setTimeout(()=>t.classList.remove("show"), 2600);
 }
+// Blocca i doppi click: mostra il caricamento e ripristina il pulsante
+// anche quando l'API non risponde o l'azione fallisce.
+function conLoadingUS(id, azione, label){
+  const b = $(id);
+  if (b.disabled) return;
+  const precedente = b.innerHTML;
+  b.disabled = true;
+  b.innerHTML = '<span class="adm-spin"></span> ' + esc(label || "In corso…");
+  return Promise.resolve().then(azione)
+    .catch(e=>{ console.error("Assistente DM:", e); toast("Errore inatteso: riprova"); })
+    .finally(()=>{ b.innerHTML = precedente; b.disabled = false; });
+}
+// Salva l'ambientazione subito, senza attendere un timer che potrebbe
+// non scattare se chiudi o aggiorni la pagina immediatamente.
+$("np-amb").value = leggiDato("adm_ambientazione", "");
+$("np-amb").addEventListener("input", ()=>salvaDato("adm_ambientazione", $("np-amb").value));
 
 /* --- minimizza / chiudi / trascina --- */
 $("adm-min").addEventListener("click", ()=>{
@@ -189,16 +206,21 @@ P.querySelectorAll("#adm-tabs button").forEach(b=>{
    INIZIATIVA — stato + rendering + watcher della chat
    ============================================================ */
 let init = { lista:[], indice:-1, round:0 };
-function salvaInit(){ GM_setValue("adm_iniziativa", JSON.stringify(init)); }
+function salvaInit(){ salvaDato("adm_iniziativa", JSON.stringify(init)); }
 try{
-  const salv = GM_getValue("adm_iniziativa","");
-  if (salv){ const j = JSON.parse(salv); if (Array.isArray(j.lista)) init = j; }
+  const salv = leggiDato("adm_iniziativa","");
+  if (salv){ const j = JSON.parse(salv); if (j && Array.isArray(j.lista)) init = {
+    lista:j.lista.filter(x=>x && typeof x.nome==="string" && Number.isFinite(+x.init))
+      .map(x=>({nome:x.nome,init:+x.init})),
+    indice:Number.isInteger(j.indice)&&j.indice>=0&&j.indice<j.lista.length?j.indice:-1,
+    round:Number.isInteger(j.round)&&j.round>=0?j.round:0
+  }; }
 }catch(e){}
 
 function aggiungiCombattente(nome, val, daChat){
   nome = String(nome||"").trim();
+  if (!nome || val == null || val === "" || !Number.isFinite(+val)) return false;
   val = +val;
-  if (!nome || isNaN(val)) return false;
   val = clamp(val, 0, 30);
   const es = init.lista.find(x=>x.nome.toLowerCase() === nome.toLowerCase());
   if (es) es.init = val; else init.lista.push({nome, init:val});
@@ -256,7 +278,7 @@ $("adm-add").addEventListener("click", ()=>{
   if (aggiungiCombattente(nome, val)){
     $("adm-nome").value = ""; $("adm-val").value = ""; $("adm-nomesele").value = "";
     toast("Aggiunto");
-  }
+  } else toast("Inserisci nome e valore del tiro");
 });
 $("adm-nome").addEventListener("keydown", e=>{ if (e.key === "Enter") $("adm-add").click(); });
 $("adm-val").addEventListener("keydown", e=>{ if (e.key === "Enter") $("adm-add").click(); });
@@ -294,12 +316,13 @@ function processaMessaggio(el){
     const bundle = (nome + " " + formula + " " + testo).toLowerCase();
     const d20 = /d20/.test(formula);
     // 1) qualsiasi nome che tira un d20 viene ricordato per l'aggiunta rapida
-    if (d20 && nome && !nomiRecenti.slice(-15).includes(nome)){
+    if (d20 && nome && !nomiRecenti.includes(nome)){
       nomiRecenti.push(nome);
+      if (nomiRecenti.length > 15) nomiRecenti.shift(); // memoria limitata, anche dopo ore di chat
       aggiornaSelectNomi();
     }
     // 2) tiro di INIZIATIVA (parola "iniziativa"/"initiative" nel messaggio o nella formula)
-    if (tot != null && !isNaN(tot) && /iniziattiv|initiative/.test(bundle)){
+    if (tot != null && !isNaN(tot) && /iniziativ|initiative/.test(bundle)){
       const nomeFinale = nome || "Combattente";
       aggiungiCombattente(nomeFinale, tot, true);
     }
@@ -310,7 +333,7 @@ function avviaWatcher(){
     for (const mut of muts){
       for (const node of mut.addedNodes){
         if (node.nodeType !== 1) continue;
-        if (node.id === "adm-panel") continue;
+        if (node.id === "adm-panel" || (P.contains && P.contains(node))) continue;
         let msgs = [];
         if (node.classList && node.classList.contains("chat-message")) msgs = [node];
         else if (node.querySelectorAll) msgs = Array.from(node.querySelectorAll(".chat-message"));
@@ -356,7 +379,12 @@ $("enc-gen").addEventListener("click", ()=>{
 $("enc-copy").style.display = "none";
 
 /* --- Livelli PG: salva, media, promemoria in chat --- */
-function getParty(){ try{ return JSON.parse(GM_getValue("adm_party","[]")); }catch(e){ return []; } }
+function getParty(){
+  try{
+    const j = JSON.parse(leggiDato("adm_party","[]"));
+    return Array.isArray(j) ? j.filter(x=>x && typeof x.nome==="string" && Number.isFinite(+x.liv)) : [];
+  }catch(e){ return []; }
+}
 function renderParty(){
   const p = getParty();
   $("pg-lista").innerHTML = p.length
@@ -365,12 +393,13 @@ function renderParty(){
 }
 $("pg-salva").addEventListener("click", ()=>{
   const nome = $("pg-nome").value.trim();
-  const liv = clamp(+$("pg-liv").value || 0, 1, 30);
-  if (!nome || !liv){ toast("Nome e livello"); return; }
+  const valore = $("pg-liv").value;
+  if (!nome || valore === "" || !Number.isFinite(+valore)){ toast("Inserisci nome e livello del PG"); return; }
+  const liv = clamp(Math.round(+valore), 1, 30);
   let p = getParty();
   const es = p.find(x=>x.nome.toLowerCase() === nome.toLowerCase());
   if (es) es.liv = liv; else p.push({nome, liv});
-  GM_setValue("adm_party", JSON.stringify(p));
+  salvaDato("adm_party", JSON.stringify(p));
   $("pg-nome").value = ""; $("pg-liv").value = "";
   renderParty(); toast("PG salvato");
 });
@@ -397,9 +426,17 @@ $("pg-chat").addEventListener("click", ()=>{
 });
 
 /* ============================================================
-   PNG
+   PNG / EVENTI — un unico rendering per successo e fallback
    ============================================================ */
-$("np-gen").addEventListener("click", async ()=>{
+function mostraRisultatoUS(box, titolo, testo, avviso=""){
+  box.innerHTML = (avviso ? `<div class="adm-hint" style="color:#e35d5d" role="alert">⚠️ ${esc(avviso)}</div>` : "") +
+    `<div class="adm-res"><div class="t">${esc(titolo)}</div>${esc(testo)}</div>`;
+  const b = document.createElement("button");
+  b.className = "adm-btn"; b.style.marginTop = "8px"; b.textContent = "📋 Copia";
+  b.onclick = ()=>toast(copiaTesto(testo) ? "Copiato" : "Copia non riuscita");
+  box.appendChild(b);
+}
+$("np-gen").addEventListener("click", ()=>conLoadingUS("np-gen", async ()=>{
   const amb = $("np-amb").value.trim();
   const usaLLM = $("np-llm").checked && llmConfigurato();
   const box = $("np-res");
@@ -412,19 +449,16 @@ $("np-gen").addEventListener("click", async ()=>{
     } else {
       testo = generaPNGProc() + (amb ? "\n\n(Ambientazione di riferimento: " + amb + ")" : "");
     }
-    box.innerHTML = `<div class="adm-res"><div class="t">🎭 PNG</div>${esc(testo)}</div>`;
-    const t = testo;
-    const b = document.createElement("button");
-    b.className = "adm-btn"; b.style.marginTop = "8px"; b.textContent = "📋 Copia";
-    b.onclick = ()=>{ if (copiaTesto(t)) toast("PNG copiato"); else toast("Copia non riuscita"); };
-    box.appendChild(b);
+    mostraRisultatoUS(box, "🎭 PNG", testo,
+      $("np-llm").checked && !usaLLM ? "Chiave LLM non configurata: uso i dati locali. Vai in Impostazioni." : "");
   }catch(e){
     if (usaLLM){
-      const testo = generaPNGProc();
-      box.innerHTML = `<div class="adm-hint">⚠️ LLM non raggiungibile (${esc(e.message)}) — uso procedurale</div><div class="adm-res"><div class="t">🎭 PNG</div>${esc(testo)}</div>`;
-    } else box.innerHTML = `<div class="adm-hint">Errore: ${esc(e.message)}</div>`;
+      const testo = generaPNGProc() + (amb ? "\n\n(Ambientazione di riferimento: " + amb + ")" : "");
+      mostraRisultatoUS(box, "🎭 PNG (dati locali)", testo,
+        "LLM non raggiungibile (" + e.message + "). Uso i dati locali.");
+    } else box.textContent = "⚠️ Errore: " + e.message;
   }
-});
+}, "Generazione in corso…"));
 
 /* ============================================================
    BOTTINO
@@ -450,11 +484,11 @@ $("lt-copy").style.display = "none";
 (function(){
   const sel = $("ev-biome");
   sel.innerHTML = Object.keys(L_BIOMI).map(k=>`<option value="${k}">${L_BIOMI[k].icon} ${L_BIOMI[k].nome}</option>`).join("");
-  const s = GM_getValue("adm_biome","");
+  const s = leggiDato("adm_biome","");
   if (s && L_BIOMI[s]) sel.value = s;
-  sel.addEventListener("change", ()=>GM_setValue("adm_biome", sel.value));
+  sel.addEventListener("change", ()=>salvaDato("adm_biome", sel.value));
 })();
-$("ev-gen").addEventListener("click", async ()=>{
+$("ev-gen").addEventListener("click", ()=>conLoadingUS("ev-gen", async ()=>{
   const idB = $("ev-biome").value;
   const amb = $("np-amb").value.trim();
   const usaLLM = $("ev-llm").checked && llmConfigurato();
@@ -469,20 +503,17 @@ $("ev-gen").addEventListener("click", async ()=>{
       const e = generaEventoProc(idB);
       testo = "METEO: " + e.meteo + "\nIMPREVVISTO: " + e.evento;
     }
-    box.innerHTML = `<div class="adm-res"><div class="t">🌩️ ${L_BIOMI[idB].nome}</div>${esc(testo)}</div>`;
-    const t = testo;
-    const b = document.createElement("button");
-    b.className = "adm-btn"; b.style.marginTop = "8px"; b.textContent = "📋 Copia";
-    b.onclick = ()=>{ if (copiaTesto(t)) toast("Evento copiato"); else toast("Copia non riuscita"); };
-    box.appendChild(b);
+    mostraRisultatoUS(box, "🌩️ " + L_BIOMI[idB].nome, testo,
+      $("ev-llm").checked && !usaLLM ? "Chiave LLM non configurata: uso i dati locali. Vai in Impostazioni." : "");
   }catch(e){
     if (usaLLM){
       const p = generaEventoProc(idB);
       const testo = "METEO: " + p.meteo + "\nIMPREVVISTO: " + p.evento;
-      box.innerHTML = `<div class="adm-hint">⚠️ LLM non raggiungibile (${esc(e.message)}) — uso la tabella</div><div class="adm-res"><div class="t">🌩️ ${L_BIOMI[idB].nome}</div>${esc(testo)}</div>`;
-    } else box.innerHTML = `<div class="adm-hint">Errore: ${esc(e.message)}</div>`;
+      mostraRisultatoUS(box, "🌩️ " + L_BIOMI[idB].nome + " (dati locali)", testo,
+        "LLM non raggiungibile (" + e.message + "). Uso i dati locali.");
+    } else box.textContent = "⚠️ Errore: " + e.message;
   }
-});
+}, "Generazione in corso…"));
 
 /* ============================================================
    IMPOSTAZIONI LLM
@@ -493,7 +524,9 @@ function aggiornaModelloWrap(){
   carregaModelliUS();
 }
 // compila il menu a tendina con i modelli gratuiti ATTUALI
+let modSeqUS = 0;
 async function carregaModelliUS(){
+  const seq = ++modSeqUS;
   const prov = $("st-prov").value;
   const sel = $("st-modsel");
   if (prov === "nessuno"){ sel.innerHTML = ""; return; }
@@ -504,6 +537,7 @@ async function carregaModelliUS(){
   sel.innerHTML = '<option value="">⏳ Caricamento…</option>';
   try{
     const lista = await listaModelliFree(prov, $("st-key").value.trim());
+    if (seq !== modSeqUS || prov !== $("st-prov").value) return;
     if (!lista || !lista.length) throw new Error("vuota");
     const salvo = (getLLM().model || "").trim();
     let html = '<option value="__default__">⚡ ' + LLM_DEFAULT_MODEL[prov] + "</option>";
@@ -511,7 +545,10 @@ async function carregaModelliUS(){
     sel.innerHTML = html;
     if (salvo){ if (lista.some(m=>m.id===salvo)) sel.value = salvo; else $("st-mod").value = salvo; }
   }catch(e){
+    if (seq !== modSeqUS || prov !== $("st-prov").value) return;
     sel.innerHTML = '<option value="__default__">⚠️ Elenco non caricato — predefinito (' + LLM_DEFAULT_MODEL[prov] + ")</option>";
+    const salvo = (getLLM().model || "").trim();
+    if (salvo) $("st-mod").value = salvo;
   }
 }
 // modello da usare: campo personalizzato, altrimenti selezione, altrimenti predefinito (gestito dal motore)
@@ -524,41 +561,56 @@ function carregaSettings(){
   const s = getLLM();
   $("st-prov").value = s.provider || "nessuno";
   $("st-key").value = s.key || "";
+  $("st-mod").value = "";
   aggiornaModelloWrap();
   $("st-stat").textContent = s.key ? "🟢 Chiave salvata (" + s.provider + ")" : "Nessuna chiave salvata.";
 }
-$("st-prov").addEventListener("change", aggiornaModelloWrap);
-$("st-modrl").addEventListener("click", carregaModelliUS);
+$("st-prov").addEventListener("change", ()=>{ $("st-mod").value=""; aggiornaModelloWrap(); });
+$("st-modsel").addEventListener("change", ()=>{ $("st-mod").value=""; });
+$("st-modrl").addEventListener("click", ()=>conLoadingUS("st-modrl", carregaModelliUS, "Caricamento…"));
 $("st-salva").addEventListener("click", ()=>{
-  GM_setValue("adm_llm", JSON.stringify({
+  salvaDato("adm_llm", JSON.stringify({
     provider: $("st-prov").value, model: modelloEffettivoUS(), key: $("st-key").value.trim()
   }));
   carregaSettings(); toast("Impostazioni salvate");
 });
-$("st-test").addEventListener("click", async ()=>{
+$("st-test").addEventListener("click", ()=>conLoadingUS("st-test", async ()=>{
   const keyT = $("st-key").value.trim();
   const provT = $("st-prov").value;
   if (provT === "nessuno" || !keyT){ toast("Scegli provider e incolla la chiave"); return; }
-  GM_setValue("adm_llm", JSON.stringify({ provider:provT, model:modelloEffettivoUS(), key:keyT }));
+  // Non persistere chiavi sbagliate finché l'utente non preme Salva.
+  const config = {provider:provT, model:modelloEffettivoUS(), key:keyT};
   $("st-stat").textContent = "⏳ Test in corso…";
   try{
-    await chatLLM("Sei un assistente di test. Rispondi solo: OK", "Di' OK.");
+    await chatLLM("Sei un assistente di test. Rispondi solo: OK", "Di' OK.", config);
     $("st-stat").textContent = "🟢 Connesso! Premi Salva per confermare.";
     toast("Connessione riuscita");
   }catch(e){
     $("st-stat").textContent = "🔴 " + e.message;
     toast("Test fallito");
   }
-});
+}, "Test in corso…"));
 $("st-canc").addEventListener("click", ()=>{
-  GM_setValue("adm_llm", "null");
+  rimuoviDato("adm_llm");
+  $("st-key").value = ""; $("st-mod").value = "";
   carregaSettings(); toast("Chiave rimossa");
 });
-$("st-ricarica").addEventListener("click", async ()=>{
-  $("st-fonte").textContent = "caricamento…";
+$("st-ricarica").addEventListener("click", ()=>conLoadingUS("st-ricarica", async ()=>{
+  $("st-fonte").textContent = "⏳ Caricamento…";
   const okc = await caricaMostriOnline();
-  $("st-fonte").textContent = state.fonte + (okc ? " — " + state.mostri.length + " mostri" : "");
-  toast(okc ? "Dati online caricati" : "Uso il dizionario locale");
+  $("st-fonte").textContent = okc ? state.fonte + " — " + state.mostri.length + " mostri"
+    : "⚠️ Errore di connessione: uso i dati locali (" + L_MOSTRI.length + " mostri).";
+  toast(okc ? "Dati online caricati" : "Errore di connessione: uso i dati locali");
+}, "Caricamento…"));
+$("st-reset").addEventListener("click", ()=>{
+  if (!confirm("Azzero chiave, ambientazione, iniziativa, gruppo e bioma salvati per Roll20?")) return;
+  ["adm_llm","adm_ambientazione","adm_iniziativa","adm_party","adm_biome"].forEach(rimuoviDato);
+  init = {lista:[], indice:-1, round:0};
+  $("np-amb").value = "";
+  $("ev-biome").value = "foresta";
+  $("st-key").value = "";
+  carregaSettings(); renderInit(); renderParty();
+  toast("Dati della campagna azzerati");
 });
 
 /* ============================================================
@@ -568,8 +620,13 @@ carregaSettings();
 renderInit();
 aggiornaBudget();
 renderParty();
+$("st-fonte").textContent = "Dati locali disponibili subito — collegamento API in corso…";
 caricaMostriOnline().then(okc=>{
-  $("st-fonte").textContent = state.fonte + (okc ? " — " + state.mostri.length + " mostri" : "");
+  $("st-fonte").textContent = okc ? state.fonte + " — " + state.mostri.length + " mostri"
+    : "⚠️ Errore di connessione: uso i dati locali (" + L_MOSTRI.length + " mostri).";
+  if (!okc) toast("Errore di connessione: uso i dati locali");
+}).catch(()=>{
+  $("st-fonte").textContent = "⚠️ Errore di connessione: uso i dati locali.";
 });
 avviaWatcher();
 

@@ -55,6 +55,7 @@ function gmFetchJSON(url, opts){
               const raw = j.error && j.error.metadata && j.error.metadata.raw;
               if (raw) msg += " · dettaglio: " + (typeof raw === "string" ? raw : JSON.stringify(raw)).slice(0, 300);
             }catch(e){}
+            if ((r.status === 401 || r.status === 403) && !/HTTP 40[13]/.test(msg)) msg = "HTTP " + r.status + " · " + msg;
             reject(new Error(msg));
           }
         },
@@ -64,7 +65,7 @@ function gmFetchJSON(url, opts){
     }catch(e){ reject(e); }
   });
 }
-const API_MON = "https://www.dnd5eapi.co/api/monsters";
+const API_MON = "https://www.dnd5eapi.co/api/2014/monsters";
 
 /* --- Stato mostri: parte dal dizionario locale, poi prova l'API online --- */
 const state = {
@@ -82,12 +83,14 @@ async function caricaMostriOnline(){
     const j = await gmFetchJSON(API_MON, {timeout:8000});
     const arr = elencoDaJson(j);
     if (!arr.length) throw new Error("vuoto");
-    state.mostri = arr.map(m=>({
-      nome:m.name, cr:crNum(m.challenge_rating ?? m.cr ?? 0),
-      xp:m.xp ?? m.xp_reward ?? xpDaCR(m.challenge_rating ?? m.cr ?? 0),
-      locale:null, url:m.url || null
-    }));
-    state.fonte = "API SRD (dnd5eapi.co)";
+    state.mostri = arr.map(m=>{
+      const locale = L_MOSTRI.find(x=>x.n.toLowerCase()===m.name.toLowerCase());
+      const cr = m.challenge_rating ?? m.cr ?? locale?.cr ?? null;
+      return {nome:m.name, cr:cr==null?null:crNum(cr),
+        xp:m.xp ?? m.xp_reward ?? locale?.xp ?? (cr==null?null:xpDaCR(cr)),
+        locale:null, url:m.url || null};
+    });
+    state.fonte = "API SRD (dnd5eapi.co) · scontri con CR/XP locali SRD";
     state.online = true;
     return true;
   }catch(e){
@@ -101,9 +104,9 @@ async function dettaglioMostro(m){
     try{
       const r = await gmFetchJSON(/^https?:/.test(m.url) ? m.url : "https://www.dnd5eapi.co"+m.url, {timeout:8000});
       return r;
-    }catch(e){ return null; }
+    }catch(e){ /* API non disponibile: prova la scheda incorporata */ }
   }
-  return null;
+  return L_MOSTRI.find(x=>x.n.toLowerCase()===String(m.nome).toLowerCase()) || null;
 }
 
 /* --- Budget XP (DMG 5e) --- */
@@ -114,44 +117,57 @@ function budgetXp(livello, pcs, diff){
 }
 function generaIncontro(livello, pcs, diff){
   const budget = budgetXp(livello, pcs, diff);
-  let pool = state.mostri.filter(m => m.xp > 0 && m.xp <= budget*1.5 && crNum(m.cr) <= livello + 2 && crNum(m.cr) >= 0.25);
-  if (pool.length < 4) pool = state.mostri.filter(m => m.xp > 0 && crNum(m.cr) <= livello + 3);
-  if (!pool.length) pool = state.mostri.filter(m => m.xp > 0);
+  // L'indice dell'API non contiene CR/XP: usa i dati SRD locali verificati,
+  // anziché trattare ogni voce sconosciuta come un falso mostro CR 0.
+  const noti = state.mostri.filter(m=>Number.isFinite(m.cr) && Number.isFinite(m.xp) && m.xp>0);
+  const poolDati = noti.length >= L_MOSTRI.length ? noti : L_MOSTRI.map(m=>({nome:m.n,cr:m.cr,xp:m.xp}));
+  let pool = poolDati.filter(m => m.xp > 0 && m.xp <= budget*1.5 && crNum(m.cr) <= livello + 2 && crNum(m.cr) >= 0.25);
+  if (pool.length < 4) pool = poolDati.filter(m => m.xp > 0 && crNum(m.cr) <= livello + 3);
+  if (!pool.length) pool = poolDati.filter(m => m.xp > 0);
   const fit = pool.filter(m=>m.xp <= budget);
   let main;
   if (fit.length){
     const sorted = [...fit].sort((a,b)=>a.xp-b.xp);
-    const top = sorted.slice(Math.floor(sorted.length*0.4));
-    const pesi = top.map(m=>Math.pow(m.xp, 0.7));
+    const top = sorted.slice(Math.floor(sorted.length*0.7));
+    const pesi = top.map(m=>Math.pow(m.xp, 1.4));
     const tot = pesi.reduce((s,p)=>s+p,0);
     let r = Math.random()*tot, acc = 0;
     for (let i=0;i<top.length;i++){ acc += pesi[i]; if (r <= acc){ main = top[i]; break; } }
     if (!main) main = top[top.length-1];
+    // Se il gruppo è molto forte rispetto al catalogo locale, serve un
+    // avversario di punta: altrimenti 12 comparse non colmano il budget.
+    if (budget > sorted[sorted.length-1].xp*5) main = sorted[sorted.length-1];
   } else {
     main = [...pool].sort((a,b)=>a.xp-b.xp)[0];
   }
-  const gruppi = new Map();
-  const aggiungi = (m,qta)=>{
-    const k = m.nome;
-    if (gruppi.has(k)) gruppi.get(k).qta += qta;
-    else gruppi.set(k, { m, qta, xp:m.xp*qta });
+  const gruppi = new Map(); // nome → {m, qta}
+  const aggiungi = m=>{
+    const es = gruppi.get(m.nome);
+    if (es) es.qta++;
+    else gruppi.set(m.nome, {m, qta:1});
   };
-  aggiungi(main, 1);
-  let tot = main.xp;
-  let guard = 0;
-  while (tot < budget*0.9 && gruppi.size < 5 && guard++ < 60){
+  aggiungi(main);
+  let tot = main.xp, numeroMostri = 1;
+  // Riempi fino al 90% del budget: massimo 5 tipi e 12 creature, per evitare
+  // eserciti di 60 goblin e loop lunghi quando il catalogo è limitato.
+  while (tot < budget*0.9 && numeroMostri < 12){
     const rest = budget - tot;
-    let cands = fit.filter(m => m.nome !== main.nome && crNum(m.cr) <= crNum(main.cr)*0.75 && m.xp <= rest);
-    if (!cands.length) cands = fit.filter(m => m.nome !== main.nome && m.xp <= rest);
-    if (!cands.length) break;
-    const chosen = pick(cands);
-    aggiungi(chosen, 1);
+    const compatibili = fit.filter(m=>m.xp <= rest &&
+      (gruppi.size < 5 || gruppi.has(m.nome)));
+    if (!compatibili.length) break;
+    let cands = rest > main.xp*2 ? compatibili :
+      compatibili.filter(m=>m.nome !== main.nome &&
+        crNum(m.cr) <= crNum(main.cr)*0.75);
+    // Se i supporti non bastano (o il budget è molto alto), ripeti un
+    // gruppo forte invece di riempire il campo con soli mostri deboli.
+    if (!cands.length) cands = compatibili;
+    const pesi = cands.map(m=>Math.pow(m.xp,1.3));
+    let dado = Math.random()*pesi.reduce((a,v)=>a+v,0);
+    let chosen = cands[cands.length-1];
+    for (let i=0;i<cands.length;i++) if ((dado-=pesi[i]) <= 0){ chosen=cands[i]; break; }
+    aggiungi(chosen);
     tot += chosen.xp;
-  }
-  if (tot < budget*0.5){
-    const k = pick([...gruppi.keys()]);
-    const g = gruppi.get(k);
-    g.qta += 1; g.xp += g.m.xp; tot += g.m.xp;
+    numeroMostri++;
   }
   const list = [...gruppi.values()].sort((a,b)=>b.m.cr-a.m.cr);
   return {
@@ -272,16 +288,41 @@ function generaBottino(fascia){
   return { monete, oggetti, gp:Math.round(gp) };
 }
 
-/* --- LLM (chiave salvata con GM_setValue, resta solo nel browser) --- */
+/* --- Persistenza Roll20: localStorage del browser; migra i vecchi dati GM --- */
+// Se il browser blocca localStorage (modalità privata/permessi), usa GM come riserva.
+function leggiDato(k, def=""){
+  try{
+    const v = localStorage.getItem(k);
+    if (v !== null) return v;
+    const legacy = GM_getValue(k, null);
+    if (legacy !== null && legacy !== undefined){
+      localStorage.setItem(k, String(legacy));
+      return String(legacy);
+    }
+  }catch(e){
+    try{ return GM_getValue(k, def); }catch(ignore){}
+  }
+  return def;
+}
+function salvaDato(k, v){
+  try{ localStorage.setItem(k, String(v)); }
+  catch(e){ GM_setValue(k, String(v)); }
+}
+function rimuoviDato(k){
+  try{ localStorage.removeItem(k); }catch(e){}
+  // Impedisce che una vecchia impostazione GM riappaia dopo la cancellazione.
+  try{ GM_setValue(k, ""); }catch(e){}
+}
+/* --- LLM (chiave inserita in GUI, mai nello script) --- */
 function getLLM(){
-  try{ return JSON.parse(GM_getValue("adm_llm","null")) || {}; }catch(e){ return {}; }
+  try{ return JSON.parse(leggiDato("adm_llm","null")) || {}; }catch(e){ return {}; }
 }
 function llmConfigurato(){
   const s = getLLM();
   return !!(s.provider && s.provider !== "nessuno" && s.key);
 }
-function chatLLM(sys, user){
-  const s = getLLM();
+function chatLLM(sys, user, config){
+  const s = config || getLLM();
   if (!s.provider || s.provider === "nessuno" || !s.key)
     return Promise.reject(new Error("LLM non configurato (scheda Impostazioni)"));
   const model = s.model || LLM_DEFAULT_MODEL[s.provider];
@@ -301,7 +342,7 @@ function chatLLM(sys, user){
     headers.Authorization = "Bearer " + s.key;
   } else return Promise.reject(new Error("Provider sconosciuto"));
   const opts = {method:"POST", headers, body, timeout:30000};
-  const TRANSITORIO = /provider returned error|overloaded|rate.?limit|too many requests|capacity|timeout/i;
+  const TRANSITORIO = /provider returned error|overloaded|rate.?limit|too many requests|capacity|timeout|HTTP 429|HTTP 503/i;
   // se l'errore è un sovraccarico "di momento", aspetta 1,5 s e riprova una volta
   return gmFetchJSON(url, opts)
     .catch(e=>{
@@ -320,10 +361,10 @@ const PROMPT_SYS_EVENT = "Sei un master di D&D 5e. Rispondi SEMPRE in italiano e
 
 // suggerimento pratico per gli errori più comuni dei modelli gratuiti
 function hintErroreLLM(msg){
-  if (/provider returned error|overloaded|rate.?limit|too many requests|capacity/i.test(msg)){
+  if (/provider returned error|overloaded|rate.?limit|too many requests|capacity|HTTP 429|HTTP 503/i.test(msg)){
     return msg + "\n\n💡 I modelli gratuiti di OpenRouter sono condivisi e possono essere sovraccarichi. Aspetta 1-2 minuti e riprova, oppure scegli un modello diverso dal menu (ognuno è ospitato da un provider diverso). Se l'errore continua con TUTTI i modelli, controlla il motivo esatto su https://openrouter.ai/activity.";
   }
-  if (/key|invalid|unauthorized|forbidden/i.test(msg)){
+  if (/key|invalid|unauthorized|forbidden|HTTP 401|HTTP 403/i.test(msg)){
     return msg + "\n\n💡 Verifica di aver incollato la chiave corretta (OpenRouter → Keys) senza spazi aggiuntivi.";
   }
   return msg;

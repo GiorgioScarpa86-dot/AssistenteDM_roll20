@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Assistente DM — Pannello integrato per Roll20
 // @namespace    assistente-dm.roll20
-// @version      1.0.0
+// @version      1.1.0
 // @description  Assistente per Dungeon Master D&D 5e: intercetta i tiri di iniziativa dalla chat di Roll20, genera scontri bilanciati, PNG coerenti, bottino e imprevisti. Zero codice: installalo e usalo.
 // @author       AssistenteDM
 // @match        https://app.roll20.net/*
@@ -9,6 +9,11 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_registerMenuCommand
+// @connect      www.dnd5eapi.co
+// @connect      openrouter.ai
+// @connect      api.groq.com
+// @connect      api-inference.huggingface.co
 // @run-at       document-idle
 // ==/UserScript==
 /* ============================================================
@@ -78,7 +83,11 @@ const CSS = `
 .adm-btn.gold{ background:linear-gradient(180deg,#f2dc82,#d4af37 55%,#8a6d1d); color:#1c1503; border-color:#f2dc82; }
 .adm-btn.gold:hover{ filter:brightness(1.08); color:#120d01; }
 .adm-btn.danger{ color:#e35d5d; border-color:rgba(227,93,93,.4); }
+.adm-btn:disabled{ opacity:.6; cursor:wait; pointer-events:none; }
+.adm-spin{ display:inline-block; width:12px; height:12px; border:2px solid #6b6051; border-top-color:#d4af37; border-radius:50%; animation:admrot .8s linear infinite; vertical-align:-2px; }
+@keyframes admrot{ to{transform:rotate(360deg)} }
 .adm-hint{ color:#9a93a6; font-size:11.5px; margin:5px 0; }
+#adm-panel #st-stat{ white-space:pre-wrap; overflow-wrap:anywhere; }
 .adm-res{
   background:rgba(0,0,0,.3); border:1px solid #30303e; border-left:3px solid #d4af37;
   border-radius:8px; padding:10px 11px; margin-top:10px; white-space:pre-wrap; font-size:12.5px;
@@ -298,12 +307,12 @@ const L_MOSTRI = [
 // Formato: n=nome, liv=livello (0=incantesimo minore), sc=scuola, ct=tempo di lancio,
 //          rg=portata, comp=componenti, dur=durata, con=concentrazione, desc=descrizione, hl=livelli superiori
 const L_SPELLS = [
-{n:"Dardi Arcani",nE:"Magic Missile",liv:0,sc:"Evocazione",ct:"1 azione",rg:"120 piedi",comp:"V",dur:"Istantanea",con:false,
- desc:"Tre dardi di forza arcanica volano verso bersagli alla tua portata. Per ogni dado, scegli un bersaglio nell'area o un nuovo bersaglio nella portata. Un dado di 1d4+1 danni di forza per dardo. Ogni dardo infligge i suoi danni contro un bersaglio, poi i dardi rimanenti contro un secondo bersaglio."},
+{n:"Dardi Arcani",nE:"Magic Missile",liv:1,sc:"Evocazione",ct:"1 azione",rg:"120 piedi",comp:"V, S",dur:"Istantanea",con:false,
+ desc:"Tre dardi colpiscono automaticamente creature a tua scelta che puoi vedere entro la portata. Ogni dardo infligge 1d4+1 danni da forza. Puoi indirizzare i dardi sullo stesso bersaglio o su bersagli diversi. Con slot più alti, ottieni un dardo aggiuntivo per livello oltre il primo."},
 {n:"Fulmine di Fuoco",nE:"Fire Bolt",liv:0,sc:"Evocazione",ct:"1 azione",rg:"120 piedi",comp:"V, S",dur:"Istantanea",con:false,
  desc:"Spari un lampo di fuoco verso una creatura entro la portata. Tiro di attacco da incantesimo a distanza: su un successo infliggi 1d10 danni da fuoco. Il danno aumenta di 1d10 quando raggiungi il 5°, il 11° e il 17° livello."},
-{n:"Scudo",nE:"Shield",liv:1,sc:"Abiurazione",ct:"Reazione (quando vieni colpito o siete bersaglio di Palla di Fuoco)",rg:"Te stesso",comp:"S",dur:"1 round",con:false,
- desc:"Una barriera di energia arcana compare e ti protegge. Fino all'inizio del tuo prossimo turno la tua CA aumenta di 5 e hai vantaggio sui tiri salvezza sulla Destrezza. Se non hai le mani libere per i componenti, non puoi lanciare questo incantesimo."},
+{n:"Scudo",nE:"Shield",liv:1,sc:"Abiurazione",ct:"Reazione (quando sei colpito da un attacco o bersagliato da Dardi Arcani)",rg:"Te stesso",comp:"S",dur:"1 round",con:false,
+ desc:"Fino all'inizio del tuo prossimo turno ottieni +5 alla CA, anche contro l'attacco che ha innescato la reazione. Non subisci danni da Dardi Arcani."},
 {n:"Curare Ferite",nE:"Cure Wounds",liv:1,sc:"Evocazione",ct:"1 azione",rg:"Tatto",comp:"V, S",dur:"Istantanea",con:false,
  desc:"Una creatura che tocchi recupera 1d8 punti ferita, aumentati del tuo modificatore di lancio. Puoi lanciare questo incantesimo usando un livello superiore: il danno aumenta di 1d8 per ogni livello oltre il primo."},
 {n:"Armaglia Magica",nE:"Mage Armor",liv:1,sc:"Abiurazione",ct:"1 azione",rg:"Tatto",comp:"V, S, M",dur:"8 ore",con:false,
@@ -312,24 +321,24 @@ const L_SPELLS = [
  desc:"Se c'è magia entro 30 piedi, la senti: sai la sua presenza e, quando non la vedi, la direzione. Concentrandoti su una creatura o un oggetto nell'area, ne scopri la scuola di magia. Inoltre rivela la posizione di piani astrali, eterei e magici entro 30 piedi."},
 {n:"Benedizione",nE:"Bless",liv:1,sc:"Incantesimo",ct:"1 azione",rg:"30 piedi",comp:"V, S, M",dur:"1 minuto (concentrazione)",con:true,
  desc:"Fino a 3 creature alla portata scelgono di essere benedette. Ogni volta che una creatura che può vederti tira per un attacco o un tiro salvezza, può tirare un d4 e aggiungere il risultato al tiro."},
-{n:"Fermare Persona",nE:"Hold Person",liv:1,sc:"Incantesimo",ct:"1 azione",rg:"60 piedi",comp:"V, S, M",dur:"1 ora (concentrazione)",con:true,
- desc:"Una creatura umanoide che puoi vedere deve superare un tiro salvezza sulla Saggezza, altrimenti resta paralizzato. Alla fine di ogni suo turno può ritentare: su successo l'effetto termina. Se riesce al tiro con margine di 5 o più, l'effetto termina e lei è immune a questo incantesimo per 24 ore."},
-{n:"Sonno",nE:"Sleep",liv:1,sc:"Incantesimo",ct:"1 azione",rg:"30 piedi",comp:"V, S, M",dur:"1 minuto",con:false,
- desc:"Un'onda di energia sonnolenta circola nell'area. A partire dalla creatura più vicina, ogni creatura non immune deve tirare salvezza: chi fallisce cade in trance magica. Se l'energia non è esaurita, passa alla creatura successiva. Una creatura addormentata si risveglia se subisce danni o se qualcuno la usa per aiutarla o salvarla."},
+{n:"Fermare Persona",nE:"Hold Person",liv:2,sc:"Ammaliamento",ct:"1 azione",rg:"60 piedi",comp:"V, S, M",dur:"1 minuto (concentrazione)",con:true,
+ desc:"Un umanoide che puoi vedere entro la portata deve superare un tiro salvezza su Saggezza o rimane paralizzato. Alla fine di ogni suo turno ripete il tiro: su successo l'effetto termina. Con slot più alti puoi scegliere un umanoide aggiuntivo per livello oltre il secondo (entro 9 m l'uno dall'altro)."},
+{n:"Sonno",nE:"Sleep",liv:1,sc:"Ammaliamento",ct:"1 azione",rg:"90 piedi",comp:"V, S, M",dur:"1 minuto",con:false,
+ desc:"Scegli un punto entro la portata e tira 5d8: il totale indica quanti punti ferita di creature puoi influenzare entro 20 piedi. Parti dalla creatura con meno PF attuali: se i suoi PF sono pari o inferiori al totale rimanente, si addormenta, poi sottrai i suoi PF e prosegui. Non influenza non morti né creature immuni all'ammaliamento. Si sveglia se subisce danni o se qualcuno usa un'azione per svegliarla."},
 {n:"Ondata di Tuono",nE:"Thunderwave",liv:1,sc:"Evocazione",ct:"1 azione",rg:"Tu stesso (cubo di 15 piedi)",comp:"V, S",dur:"Istantanea",con:false,
  desc:"Un'onda di energia sonica si propaga in un cubo di 15 piedi. Ogni creatura nel cubo subisce 2d6 danni da tuono e deve superare un tiro salvezza sulla Destrezza, altrimenti viene spinta di 10 piedi. Oggetti non ancorati vengono spostati, e i muri sottili vengono infranti dal suono."},
-{n:"Caduta Piumata",nE:"Feather Fall",liv:1,sc:"Evocazione",ct:"1 azione",rg:"60 piedi",comp:"V, S, M",dur:"1 minuto",con:false,
- desc:"La velocità di discesa di fino a 5 creature alla portata si riduce a 60 piedi al round. Se, all'inizio del tuo turno, una creatura sta ancora cadendo, la sua velocità di discesa diventa 0."},
-{n:"Fulmine Guida",nE:"Guiding Bolt",liv:1,sc:"Evocazione",ct:"1 azione",rg:"120 piedi",comp:"V",dur:"4 round",con:false,
- desc:"Un lampo di luce arcanica si abbatte su una creatura entro la portata. Tiro di attacco da incantesimo a distanza con vantaggio: su un successo infliggi 4d6 danni da fulmine e il prossimo tiro di attacco contro di lei entro 1 round ha vantaggio. L'incantesimo termina se non la colpisci o se la concentrazione termina."},
+{n:"Caduta Piumata",nE:"Feather Fall",liv:1,sc:"Trasmutazione",ct:"Reazione (quando tu o una creatura entro 60 piedi cade)",rg:"60 piedi",comp:"V, M",dur:"1 minuto",con:false,
+ desc:"Fino a 5 creature che stanno cadendo entro la portata scendono a 60 piedi per round fino alla fine dell'incantesimo. Se atterrano mentre l'effetto è attivo, non subiscono danni da caduta e possono atterrare in piedi."},
+{n:"Fulmine Guida",nE:"Guiding Bolt",liv:1,sc:"Invocazione",ct:"1 azione",rg:"120 piedi",comp:"V, S",dur:"1 round",con:false,
+ desc:"Effettua un tiro per colpire con incantesimo a distanza. Se colpisci, il bersaglio subisce 4d6 danni radiosi; il prossimo tiro per colpire contro di lui prima della fine del tuo prossimo turno ha vantaggio."},
 {n:"Santuario",nE:"Sanctuary",liv:1,sc:"Abiurazione",ct:"1 azione",rg:"20 piedi",comp:"V, S, M",dur:"1 minuto",con:false,
  desc:"Un bagliore argentato circonda una creatura alla portata. Fino alla fine, chiunque che compia un attacco o lanci un incantesimo che la miri deve superare un tiro salvezza sulla Saggezza, altrimenti l'azione fallisce. Se la creatura compie un attacco o infligge danni, l'incantesimo termina."},
 {n:"Protezione dal Bene e dal Male",nE:"Protection from Evil and Good",liv:1,sc:"Abiurazione",ct:"1 azione",rg:"Tatto",comp:"V, S, M",dur:"10 minuti (concentrazione)",con:true,
  desc:"Finché dura, una creatura alla portata non può essere danneggiata, mirata, rilevata o trattenuta da creature abissali, celesti, elementali, infernali o non vive. Ha vantaggio su tiri salvezza contro di esse, e i demoni, celesti, elementali, infernali e non morti non possono contattarla o mirarla con incantesimi."},
 {n:"Intrappolamento",nE:"Entangle",liv:1,sc:"Coniurazione",ct:"1 azione",rg:"90 piedi",comp:"V, S",dur:"1 minuto (concentrazione)",con:true,
  desc:"Vite di vegetazione spuntano dal terreno in un quadrato di 90 piedi. Ogni creatura nell'area deve superare un tiro salvezza sulla Forza, altrimenti è trattenuta dalla vegetazione fino alla fine dell'incantesimo. Le creature che non possono muoversi sono bloccate. Un oggetto o una creatura trattenuta può usare un'azione con una prova di Forza (CA) per liberarsi."},
-{n:"Lungo Passo",nE:"Longstrider",liv:2,sc:"Mutazione",ct:"1 azione",rg:"Tatto",comp:"S",dur:"1 ora",con:false,
- desc:"Tocchi una creatura: la sua velocità aumenta di 10 piedi e i suoi tiri per abilità di Destrezza non subiscono svantaggio. L'incantesimo termina se lo lanci di nuovo sulla stessa creatura."},
+{n:"Lungo Passo",nE:"Longstrider",liv:1,sc:"Trasmutazione",ct:"1 azione",rg:"Tatto",comp:"V, S, M",dur:"1 ora",con:false,
+ desc:"Tocchi una creatura: la sua velocità aumenta di 10 piedi per un'ora. Con uno slot più alto puoi influenzare una creatura aggiuntiva per livello oltre il primo."},
 {n:"Passo Nebbioso",nE:"Misty Step",liv:2,sc:"Evocazione",ct:"Azione bonus",rg:"Te stesso",comp:"S",dur:"Istantanea",con:false,
  desc:"Sparisci brevemente dal piano astrale e ricompari entro 30 piedi. Puoi farlo solo in uno spazio che puoi vedere, e se vieni spostato contro la tua volontà, l'incantesimo termina senza effetto. Ogni materiale che porti o trasporti si teleporta con te."},
 {n:"Invisibilità",nE:"Invisibility",liv:2,sc:"Illusione",ct:"1 azione",rg:"Tatto",comp:"V, S",dur:"1 ora (concentrazione)",con:true,
@@ -339,7 +348,7 @@ const L_SPELLS = [
 {n:"Accelero",nE:"Haste",liv:3,sc:"Mutazione",ct:"1 azione",rg:"30 piedi",comp:"V, S",dur:"1 minuto (concentrazione)",con:true,
  desc:"Una creatura alla portata diventa magicamente aggrappata. CA +2, vantaggio sui tiri salvezza sulla Destrezza, velocità raddoppiata, e può usare un'azione extra ogni turno (solo Azione, Azione bonus, o Reazione). Al termine subisce stordimento."},
 {n:"Controincantesimo",nE:"Counterspell",liv:3,sc:"Abiurazione",ct:"Reazione (quando qualcuno lancia un incantesimo entro 60 piedi)",rg:"60 piedi",comp:"S",dur:"Istantanea",con:false,
- desc:"Cerchi di annullare l'incantesimo. Se l'incantesimo è di 5° livello o inferiore, è annullato automaticamente. Se è di 6° o superiore, il tuo modificatore di lancio deve eguagliare o superare il suo: DC 13 + livello dell'incantesimo."},
+ desc:"Cerchi di annullare l'incantesimo. Se l'incantesimo bersaglio è di 3° livello o inferiore, fallisce automaticamente. Se è di 4° livello o superiore, effettua una prova con la tua caratteristica da incantatore contro CD 10 + il livello dell'incantesimo. Con uno slot più alto, annulli automaticamente gli incantesimi di livello pari o inferiore a quello dello slot."},
 {n:"Volo",nE:"Fly",liv:3,sc:"Mutazione",ct:"1 azione",rg:"Tatto",comp:"V, S",dur:"10 minuti (concentrazione)",con:true,
  desc:"La velocità di volo di una creatura che tocchi diventa 60 piedi. Se l'incantesimo termina prima della durata, la creatura cade, se è ancora in aria, a meno che non possa evitare la caduta. Una creatura che vola cade a fine turno se non può muoversi."},
 {n:"Fulmine a Dado",nE:"Lightning Bolt",liv:3,sc:"Evocazione",ct:"1 azione",rg:"Te stesso (linea di 100 piedi, 5 piedi di larghezza)",comp:"V, S",dur:"Istantanea",con:false,
@@ -610,7 +619,7 @@ const LOOT_MONETE = {
  "11-16":[["1d6","sp"],["4d4","gp"],["1d2","pp"]],
  "17+":  [["2d4","gp"],["3d4","pp"]]
 };
-const LOOT_VALORI = { cp:0.01, sp:0.1, gp:1, pp:100 };
+const LOOT_VALORI = { cp:0.01, sp:0.1, gp:1, pp:10 }; // 1 moneta di platino = 10 mo
 const LOOT_NOMI = { cp:"monete di rame", sp:"monete d'argento", gp:"monete d'oro", pp:"monete di platino" };
 const LOOT_TIERS = {
  comune:  ["Pozione di guarigione","Pozione di cura malattie","Pozione di amicizia con gli animali","Pozione di invisibilità","Pozione di respirare sott'acqua","Scrollo di fermare persona","Bacchetta di rilevamento magia","Bacchetta di ragnatela","Zaino di componentistica magica","Strumento musicale incantato"],
@@ -684,6 +693,7 @@ function gmFetchJSON(url, opts){
               const raw = j.error && j.error.metadata && j.error.metadata.raw;
               if (raw) msg += " · dettaglio: " + (typeof raw === "string" ? raw : JSON.stringify(raw)).slice(0, 300);
             }catch(e){}
+            if ((r.status === 401 || r.status === 403) && !/HTTP 40[13]/.test(msg)) msg = "HTTP " + r.status + " · " + msg;
             reject(new Error(msg));
           }
         },
@@ -693,7 +703,7 @@ function gmFetchJSON(url, opts){
     }catch(e){ reject(e); }
   });
 }
-const API_MON = "https://www.dnd5eapi.co/api/monsters";
+const API_MON = "https://www.dnd5eapi.co/api/2014/monsters";
 
 /* --- Stato mostri: parte dal dizionario locale, poi prova l'API online --- */
 const state = {
@@ -711,12 +721,14 @@ async function caricaMostriOnline(){
     const j = await gmFetchJSON(API_MON, {timeout:8000});
     const arr = elencoDaJson(j);
     if (!arr.length) throw new Error("vuoto");
-    state.mostri = arr.map(m=>({
-      nome:m.name, cr:crNum(m.challenge_rating ?? m.cr ?? 0),
-      xp:m.xp ?? m.xp_reward ?? xpDaCR(m.challenge_rating ?? m.cr ?? 0),
-      locale:null, url:m.url || null
-    }));
-    state.fonte = "API SRD (dnd5eapi.co)";
+    state.mostri = arr.map(m=>{
+      const locale = L_MOSTRI.find(x=>x.n.toLowerCase()===m.name.toLowerCase());
+      const cr = m.challenge_rating ?? m.cr ?? locale?.cr ?? null;
+      return {nome:m.name, cr:cr==null?null:crNum(cr),
+        xp:m.xp ?? m.xp_reward ?? locale?.xp ?? (cr==null?null:xpDaCR(cr)),
+        locale:null, url:m.url || null};
+    });
+    state.fonte = "API SRD (dnd5eapi.co) · scontri con CR/XP locali SRD";
     state.online = true;
     return true;
   }catch(e){
@@ -730,9 +742,9 @@ async function dettaglioMostro(m){
     try{
       const r = await gmFetchJSON(/^https?:/.test(m.url) ? m.url : "https://www.dnd5eapi.co"+m.url, {timeout:8000});
       return r;
-    }catch(e){ return null; }
+    }catch(e){ /* API non disponibile: prova la scheda incorporata */ }
   }
-  return null;
+  return L_MOSTRI.find(x=>x.n.toLowerCase()===String(m.nome).toLowerCase()) || null;
 }
 
 /* --- Budget XP (DMG 5e) --- */
@@ -743,44 +755,57 @@ function budgetXp(livello, pcs, diff){
 }
 function generaIncontro(livello, pcs, diff){
   const budget = budgetXp(livello, pcs, diff);
-  let pool = state.mostri.filter(m => m.xp > 0 && m.xp <= budget*1.5 && crNum(m.cr) <= livello + 2 && crNum(m.cr) >= 0.25);
-  if (pool.length < 4) pool = state.mostri.filter(m => m.xp > 0 && crNum(m.cr) <= livello + 3);
-  if (!pool.length) pool = state.mostri.filter(m => m.xp > 0);
+  // L'indice dell'API non contiene CR/XP: usa i dati SRD locali verificati,
+  // anziché trattare ogni voce sconosciuta come un falso mostro CR 0.
+  const noti = state.mostri.filter(m=>Number.isFinite(m.cr) && Number.isFinite(m.xp) && m.xp>0);
+  const poolDati = noti.length >= L_MOSTRI.length ? noti : L_MOSTRI.map(m=>({nome:m.n,cr:m.cr,xp:m.xp}));
+  let pool = poolDati.filter(m => m.xp > 0 && m.xp <= budget*1.5 && crNum(m.cr) <= livello + 2 && crNum(m.cr) >= 0.25);
+  if (pool.length < 4) pool = poolDati.filter(m => m.xp > 0 && crNum(m.cr) <= livello + 3);
+  if (!pool.length) pool = poolDati.filter(m => m.xp > 0);
   const fit = pool.filter(m=>m.xp <= budget);
   let main;
   if (fit.length){
     const sorted = [...fit].sort((a,b)=>a.xp-b.xp);
-    const top = sorted.slice(Math.floor(sorted.length*0.4));
-    const pesi = top.map(m=>Math.pow(m.xp, 0.7));
+    const top = sorted.slice(Math.floor(sorted.length*0.7));
+    const pesi = top.map(m=>Math.pow(m.xp, 1.4));
     const tot = pesi.reduce((s,p)=>s+p,0);
     let r = Math.random()*tot, acc = 0;
     for (let i=0;i<top.length;i++){ acc += pesi[i]; if (r <= acc){ main = top[i]; break; } }
     if (!main) main = top[top.length-1];
+    // Se il gruppo è molto forte rispetto al catalogo locale, serve un
+    // avversario di punta: altrimenti 12 comparse non colmano il budget.
+    if (budget > sorted[sorted.length-1].xp*5) main = sorted[sorted.length-1];
   } else {
     main = [...pool].sort((a,b)=>a.xp-b.xp)[0];
   }
-  const gruppi = new Map();
-  const aggiungi = (m,qta)=>{
-    const k = m.nome;
-    if (gruppi.has(k)) gruppi.get(k).qta += qta;
-    else gruppi.set(k, { m, qta, xp:m.xp*qta });
+  const gruppi = new Map(); // nome → {m, qta}
+  const aggiungi = m=>{
+    const es = gruppi.get(m.nome);
+    if (es) es.qta++;
+    else gruppi.set(m.nome, {m, qta:1});
   };
-  aggiungi(main, 1);
-  let tot = main.xp;
-  let guard = 0;
-  while (tot < budget*0.9 && gruppi.size < 5 && guard++ < 60){
+  aggiungi(main);
+  let tot = main.xp, numeroMostri = 1;
+  // Riempi fino al 90% del budget: massimo 5 tipi e 12 creature, per evitare
+  // eserciti di 60 goblin e loop lunghi quando il catalogo è limitato.
+  while (tot < budget*0.9 && numeroMostri < 12){
     const rest = budget - tot;
-    let cands = fit.filter(m => m.nome !== main.nome && crNum(m.cr) <= crNum(main.cr)*0.75 && m.xp <= rest);
-    if (!cands.length) cands = fit.filter(m => m.nome !== main.nome && m.xp <= rest);
-    if (!cands.length) break;
-    const chosen = pick(cands);
-    aggiungi(chosen, 1);
+    const compatibili = fit.filter(m=>m.xp <= rest &&
+      (gruppi.size < 5 || gruppi.has(m.nome)));
+    if (!compatibili.length) break;
+    let cands = rest > main.xp*2 ? compatibili :
+      compatibili.filter(m=>m.nome !== main.nome &&
+        crNum(m.cr) <= crNum(main.cr)*0.75);
+    // Se i supporti non bastano (o il budget è molto alto), ripeti un
+    // gruppo forte invece di riempire il campo con soli mostri deboli.
+    if (!cands.length) cands = compatibili;
+    const pesi = cands.map(m=>Math.pow(m.xp,1.3));
+    let dado = Math.random()*pesi.reduce((a,v)=>a+v,0);
+    let chosen = cands[cands.length-1];
+    for (let i=0;i<cands.length;i++) if ((dado-=pesi[i]) <= 0){ chosen=cands[i]; break; }
+    aggiungi(chosen);
     tot += chosen.xp;
-  }
-  if (tot < budget*0.5){
-    const k = pick([...gruppi.keys()]);
-    const g = gruppi.get(k);
-    g.qta += 1; g.xp += g.m.xp; tot += g.m.xp;
+    numeroMostri++;
   }
   const list = [...gruppi.values()].sort((a,b)=>b.m.cr-a.m.cr);
   return {
@@ -901,16 +926,41 @@ function generaBottino(fascia){
   return { monete, oggetti, gp:Math.round(gp) };
 }
 
-/* --- LLM (chiave salvata con GM_setValue, resta solo nel browser) --- */
+/* --- Persistenza Roll20: localStorage del browser; migra i vecchi dati GM --- */
+// Se il browser blocca localStorage (modalità privata/permessi), usa GM come riserva.
+function leggiDato(k, def=""){
+  try{
+    const v = localStorage.getItem(k);
+    if (v !== null) return v;
+    const legacy = GM_getValue(k, null);
+    if (legacy !== null && legacy !== undefined){
+      localStorage.setItem(k, String(legacy));
+      return String(legacy);
+    }
+  }catch(e){
+    try{ return GM_getValue(k, def); }catch(ignore){}
+  }
+  return def;
+}
+function salvaDato(k, v){
+  try{ localStorage.setItem(k, String(v)); }
+  catch(e){ GM_setValue(k, String(v)); }
+}
+function rimuoviDato(k){
+  try{ localStorage.removeItem(k); }catch(e){}
+  // Impedisce che una vecchia impostazione GM riappaia dopo la cancellazione.
+  try{ GM_setValue(k, ""); }catch(e){}
+}
+/* --- LLM (chiave inserita in GUI, mai nello script) --- */
 function getLLM(){
-  try{ return JSON.parse(GM_getValue("adm_llm","null")) || {}; }catch(e){ return {}; }
+  try{ return JSON.parse(leggiDato("adm_llm","null")) || {}; }catch(e){ return {}; }
 }
 function llmConfigurato(){
   const s = getLLM();
   return !!(s.provider && s.provider !== "nessuno" && s.key);
 }
-function chatLLM(sys, user){
-  const s = getLLM();
+function chatLLM(sys, user, config){
+  const s = config || getLLM();
   if (!s.provider || s.provider === "nessuno" || !s.key)
     return Promise.reject(new Error("LLM non configurato (scheda Impostazioni)"));
   const model = s.model || LLM_DEFAULT_MODEL[s.provider];
@@ -930,7 +980,7 @@ function chatLLM(sys, user){
     headers.Authorization = "Bearer " + s.key;
   } else return Promise.reject(new Error("Provider sconosciuto"));
   const opts = {method:"POST", headers, body, timeout:30000};
-  const TRANSITORIO = /provider returned error|overloaded|rate.?limit|too many requests|capacity|timeout/i;
+  const TRANSITORIO = /provider returned error|overloaded|rate.?limit|too many requests|capacity|timeout|HTTP 429|HTTP 503/i;
   // se l'errore è un sovraccarico "di momento", aspetta 1,5 s e riprova una volta
   return gmFetchJSON(url, opts)
     .catch(e=>{
@@ -949,10 +999,10 @@ const PROMPT_SYS_EVENT = "Sei un master di D&D 5e. Rispondi SEMPRE in italiano e
 
 // suggerimento pratico per gli errori più comuni dei modelli gratuiti
 function hintErroreLLM(msg){
-  if (/provider returned error|overloaded|rate.?limit|too many requests|capacity/i.test(msg)){
+  if (/provider returned error|overloaded|rate.?limit|too many requests|capacity|HTTP 429|HTTP 503/i.test(msg)){
     return msg + "\n\n💡 I modelli gratuiti di OpenRouter sono condivisi e possono essere sovraccarichi. Aspetta 1-2 minuti e riprova, oppure scegli un modello diverso dal menu (ognuno è ospitato da un provider diverso). Se l'errore continua con TUTTI i modelli, controlla il motivo esatto su https://openrouter.ai/activity.";
   }
-  if (/key|invalid|unauthorized|forbidden/i.test(msg)){
+  if (/key|invalid|unauthorized|forbidden|HTTP 401|HTTP 403/i.test(msg)){
     return msg + "\n\n💡 Verifica di aver incollato la chiave corretta (OpenRouter → Keys) senza spazi aggiuntivi.";
   }
   return msg;
@@ -1098,9 +1148,10 @@ P.innerHTML = `
         <button class="adm-btn danger" id="st-canc">🗑</button>
       </div>
       <div id="st-stat" class="adm-hint"></div>
-      <p class="adm-hint" style="border:1px dashed rgba(84,194,136,.35);border-radius:7px;padding:6px 8px">🔒 La chiave resta solo nel browser (memoria di Tampermonkey). Viene inviata solo al provider che scegli tu, quando premi un bottone di generazione.</p>
+      <p class="adm-hint" style="border:1px dashed rgba(84,194,136,.35);border-radius:7px;padding:6px 8px">🔒 La chiave è salvata nel localStorage del browser per roll20.net (se non disponibile, nella memoria Tampermonkey). Altri script attivi sulla stessa pagina potrebbero leggerla: usa una chiave dedicata con limiti di spesa. Viene inviata al provider scelto solo quando testi la connessione o generi con LLM.</p>
       <p class="adm-hint">Fonte mostri: <span id="st-fonte">—</span> · SRD 5.1 (OGL 1.0a)</p>
       <div class="adm-row"><button class="adm-btn" id="st-ricarica">🔄 Ricarica dati mostri</button></div>
+      <div class="adm-row"><button class="adm-btn danger" id="st-reset">⚠️ Azzera dati salvati della campagna</button></div>
     </div>
 
     <div class="adm-toast" id="adm-toast"></div>
@@ -1116,6 +1167,22 @@ function toast(msg){
   clearTimeout(toastT);
   toastT = setTimeout(()=>t.classList.remove("show"), 2600);
 }
+// Blocca i doppi click: mostra il caricamento e ripristina il pulsante
+// anche quando l'API non risponde o l'azione fallisce.
+function conLoadingUS(id, azione, label){
+  const b = $(id);
+  if (b.disabled) return;
+  const precedente = b.innerHTML;
+  b.disabled = true;
+  b.innerHTML = '<span class="adm-spin"></span> ' + esc(label || "In corso…");
+  return Promise.resolve().then(azione)
+    .catch(e=>{ console.error("Assistente DM:", e); toast("Errore inatteso: riprova"); })
+    .finally(()=>{ b.innerHTML = precedente; b.disabled = false; });
+}
+// Salva l'ambientazione subito, senza attendere un timer che potrebbe
+// non scattare se chiudi o aggiorni la pagina immediatamente.
+$("np-amb").value = leggiDato("adm_ambientazione", "");
+$("np-amb").addEventListener("input", ()=>salvaDato("adm_ambientazione", $("np-amb").value));
 
 /* --- minimizza / chiudi / trascina --- */
 $("adm-min").addEventListener("click", ()=>{
@@ -1159,16 +1226,21 @@ P.querySelectorAll("#adm-tabs button").forEach(b=>{
    INIZIATIVA — stato + rendering + watcher della chat
    ============================================================ */
 let init = { lista:[], indice:-1, round:0 };
-function salvaInit(){ GM_setValue("adm_iniziativa", JSON.stringify(init)); }
+function salvaInit(){ salvaDato("adm_iniziativa", JSON.stringify(init)); }
 try{
-  const salv = GM_getValue("adm_iniziativa","");
-  if (salv){ const j = JSON.parse(salv); if (Array.isArray(j.lista)) init = j; }
+  const salv = leggiDato("adm_iniziativa","");
+  if (salv){ const j = JSON.parse(salv); if (j && Array.isArray(j.lista)) init = {
+    lista:j.lista.filter(x=>x && typeof x.nome==="string" && Number.isFinite(+x.init))
+      .map(x=>({nome:x.nome,init:+x.init})),
+    indice:Number.isInteger(j.indice)&&j.indice>=0&&j.indice<j.lista.length?j.indice:-1,
+    round:Number.isInteger(j.round)&&j.round>=0?j.round:0
+  }; }
 }catch(e){}
 
 function aggiungiCombattente(nome, val, daChat){
   nome = String(nome||"").trim();
+  if (!nome || val == null || val === "" || !Number.isFinite(+val)) return false;
   val = +val;
-  if (!nome || isNaN(val)) return false;
   val = clamp(val, 0, 30);
   const es = init.lista.find(x=>x.nome.toLowerCase() === nome.toLowerCase());
   if (es) es.init = val; else init.lista.push({nome, init:val});
@@ -1226,7 +1298,7 @@ $("adm-add").addEventListener("click", ()=>{
   if (aggiungiCombattente(nome, val)){
     $("adm-nome").value = ""; $("adm-val").value = ""; $("adm-nomesele").value = "";
     toast("Aggiunto");
-  }
+  } else toast("Inserisci nome e valore del tiro");
 });
 $("adm-nome").addEventListener("keydown", e=>{ if (e.key === "Enter") $("adm-add").click(); });
 $("adm-val").addEventListener("keydown", e=>{ if (e.key === "Enter") $("adm-add").click(); });
@@ -1264,12 +1336,13 @@ function processaMessaggio(el){
     const bundle = (nome + " " + formula + " " + testo).toLowerCase();
     const d20 = /d20/.test(formula);
     // 1) qualsiasi nome che tira un d20 viene ricordato per l'aggiunta rapida
-    if (d20 && nome && !nomiRecenti.slice(-15).includes(nome)){
+    if (d20 && nome && !nomiRecenti.includes(nome)){
       nomiRecenti.push(nome);
+      if (nomiRecenti.length > 15) nomiRecenti.shift(); // memoria limitata, anche dopo ore di chat
       aggiornaSelectNomi();
     }
     // 2) tiro di INIZIATIVA (parola "iniziativa"/"initiative" nel messaggio o nella formula)
-    if (tot != null && !isNaN(tot) && /iniziattiv|initiative/.test(bundle)){
+    if (tot != null && !isNaN(tot) && /iniziativ|initiative/.test(bundle)){
       const nomeFinale = nome || "Combattente";
       aggiungiCombattente(nomeFinale, tot, true);
     }
@@ -1280,7 +1353,7 @@ function avviaWatcher(){
     for (const mut of muts){
       for (const node of mut.addedNodes){
         if (node.nodeType !== 1) continue;
-        if (node.id === "adm-panel") continue;
+        if (node.id === "adm-panel" || (P.contains && P.contains(node))) continue;
         let msgs = [];
         if (node.classList && node.classList.contains("chat-message")) msgs = [node];
         else if (node.querySelectorAll) msgs = Array.from(node.querySelectorAll(".chat-message"));
@@ -1326,7 +1399,12 @@ $("enc-gen").addEventListener("click", ()=>{
 $("enc-copy").style.display = "none";
 
 /* --- Livelli PG: salva, media, promemoria in chat --- */
-function getParty(){ try{ return JSON.parse(GM_getValue("adm_party","[]")); }catch(e){ return []; } }
+function getParty(){
+  try{
+    const j = JSON.parse(leggiDato("adm_party","[]"));
+    return Array.isArray(j) ? j.filter(x=>x && typeof x.nome==="string" && Number.isFinite(+x.liv)) : [];
+  }catch(e){ return []; }
+}
 function renderParty(){
   const p = getParty();
   $("pg-lista").innerHTML = p.length
@@ -1335,12 +1413,13 @@ function renderParty(){
 }
 $("pg-salva").addEventListener("click", ()=>{
   const nome = $("pg-nome").value.trim();
-  const liv = clamp(+$("pg-liv").value || 0, 1, 30);
-  if (!nome || !liv){ toast("Nome e livello"); return; }
+  const valore = $("pg-liv").value;
+  if (!nome || valore === "" || !Number.isFinite(+valore)){ toast("Inserisci nome e livello del PG"); return; }
+  const liv = clamp(Math.round(+valore), 1, 30);
   let p = getParty();
   const es = p.find(x=>x.nome.toLowerCase() === nome.toLowerCase());
   if (es) es.liv = liv; else p.push({nome, liv});
-  GM_setValue("adm_party", JSON.stringify(p));
+  salvaDato("adm_party", JSON.stringify(p));
   $("pg-nome").value = ""; $("pg-liv").value = "";
   renderParty(); toast("PG salvato");
 });
@@ -1367,9 +1446,17 @@ $("pg-chat").addEventListener("click", ()=>{
 });
 
 /* ============================================================
-   PNG
+   PNG / EVENTI — un unico rendering per successo e fallback
    ============================================================ */
-$("np-gen").addEventListener("click", async ()=>{
+function mostraRisultatoUS(box, titolo, testo, avviso=""){
+  box.innerHTML = (avviso ? `<div class="adm-hint" style="color:#e35d5d" role="alert">⚠️ ${esc(avviso)}</div>` : "") +
+    `<div class="adm-res"><div class="t">${esc(titolo)}</div>${esc(testo)}</div>`;
+  const b = document.createElement("button");
+  b.className = "adm-btn"; b.style.marginTop = "8px"; b.textContent = "📋 Copia";
+  b.onclick = ()=>toast(copiaTesto(testo) ? "Copiato" : "Copia non riuscita");
+  box.appendChild(b);
+}
+$("np-gen").addEventListener("click", ()=>conLoadingUS("np-gen", async ()=>{
   const amb = $("np-amb").value.trim();
   const usaLLM = $("np-llm").checked && llmConfigurato();
   const box = $("np-res");
@@ -1382,19 +1469,16 @@ $("np-gen").addEventListener("click", async ()=>{
     } else {
       testo = generaPNGProc() + (amb ? "\n\n(Ambientazione di riferimento: " + amb + ")" : "");
     }
-    box.innerHTML = `<div class="adm-res"><div class="t">🎭 PNG</div>${esc(testo)}</div>`;
-    const t = testo;
-    const b = document.createElement("button");
-    b.className = "adm-btn"; b.style.marginTop = "8px"; b.textContent = "📋 Copia";
-    b.onclick = ()=>{ if (copiaTesto(t)) toast("PNG copiato"); else toast("Copia non riuscita"); };
-    box.appendChild(b);
+    mostraRisultatoUS(box, "🎭 PNG", testo,
+      $("np-llm").checked && !usaLLM ? "Chiave LLM non configurata: uso i dati locali. Vai in Impostazioni." : "");
   }catch(e){
     if (usaLLM){
-      const testo = generaPNGProc();
-      box.innerHTML = `<div class="adm-hint">⚠️ LLM non raggiungibile (${esc(e.message)}) — uso procedurale</div><div class="adm-res"><div class="t">🎭 PNG</div>${esc(testo)}</div>`;
-    } else box.innerHTML = `<div class="adm-hint">Errore: ${esc(e.message)}</div>`;
+      const testo = generaPNGProc() + (amb ? "\n\n(Ambientazione di riferimento: " + amb + ")" : "");
+      mostraRisultatoUS(box, "🎭 PNG (dati locali)", testo,
+        "LLM non raggiungibile (" + e.message + "). Uso i dati locali.");
+    } else box.textContent = "⚠️ Errore: " + e.message;
   }
-});
+}, "Generazione in corso…"));
 
 /* ============================================================
    BOTTINO
@@ -1420,11 +1504,11 @@ $("lt-copy").style.display = "none";
 (function(){
   const sel = $("ev-biome");
   sel.innerHTML = Object.keys(L_BIOMI).map(k=>`<option value="${k}">${L_BIOMI[k].icon} ${L_BIOMI[k].nome}</option>`).join("");
-  const s = GM_getValue("adm_biome","");
+  const s = leggiDato("adm_biome","");
   if (s && L_BIOMI[s]) sel.value = s;
-  sel.addEventListener("change", ()=>GM_setValue("adm_biome", sel.value));
+  sel.addEventListener("change", ()=>salvaDato("adm_biome", sel.value));
 })();
-$("ev-gen").addEventListener("click", async ()=>{
+$("ev-gen").addEventListener("click", ()=>conLoadingUS("ev-gen", async ()=>{
   const idB = $("ev-biome").value;
   const amb = $("np-amb").value.trim();
   const usaLLM = $("ev-llm").checked && llmConfigurato();
@@ -1439,20 +1523,17 @@ $("ev-gen").addEventListener("click", async ()=>{
       const e = generaEventoProc(idB);
       testo = "METEO: " + e.meteo + "\nIMPREVVISTO: " + e.evento;
     }
-    box.innerHTML = `<div class="adm-res"><div class="t">🌩️ ${L_BIOMI[idB].nome}</div>${esc(testo)}</div>`;
-    const t = testo;
-    const b = document.createElement("button");
-    b.className = "adm-btn"; b.style.marginTop = "8px"; b.textContent = "📋 Copia";
-    b.onclick = ()=>{ if (copiaTesto(t)) toast("Evento copiato"); else toast("Copia non riuscita"); };
-    box.appendChild(b);
+    mostraRisultatoUS(box, "🌩️ " + L_BIOMI[idB].nome, testo,
+      $("ev-llm").checked && !usaLLM ? "Chiave LLM non configurata: uso i dati locali. Vai in Impostazioni." : "");
   }catch(e){
     if (usaLLM){
       const p = generaEventoProc(idB);
       const testo = "METEO: " + p.meteo + "\nIMPREVVISTO: " + p.evento;
-      box.innerHTML = `<div class="adm-hint">⚠️ LLM non raggiungibile (${esc(e.message)}) — uso la tabella</div><div class="adm-res"><div class="t">🌩️ ${L_BIOMI[idB].nome}</div>${esc(testo)}</div>`;
-    } else box.innerHTML = `<div class="adm-hint">Errore: ${esc(e.message)}</div>`;
+      mostraRisultatoUS(box, "🌩️ " + L_BIOMI[idB].nome + " (dati locali)", testo,
+        "LLM non raggiungibile (" + e.message + "). Uso i dati locali.");
+    } else box.textContent = "⚠️ Errore: " + e.message;
   }
-});
+}, "Generazione in corso…"));
 
 /* ============================================================
    IMPOSTAZIONI LLM
@@ -1463,7 +1544,9 @@ function aggiornaModelloWrap(){
   carregaModelliUS();
 }
 // compila il menu a tendina con i modelli gratuiti ATTUALI
+let modSeqUS = 0;
 async function carregaModelliUS(){
+  const seq = ++modSeqUS;
   const prov = $("st-prov").value;
   const sel = $("st-modsel");
   if (prov === "nessuno"){ sel.innerHTML = ""; return; }
@@ -1474,6 +1557,7 @@ async function carregaModelliUS(){
   sel.innerHTML = '<option value="">⏳ Caricamento…</option>';
   try{
     const lista = await listaModelliFree(prov, $("st-key").value.trim());
+    if (seq !== modSeqUS || prov !== $("st-prov").value) return;
     if (!lista || !lista.length) throw new Error("vuota");
     const salvo = (getLLM().model || "").trim();
     let html = '<option value="__default__">⚡ ' + LLM_DEFAULT_MODEL[prov] + "</option>";
@@ -1481,7 +1565,10 @@ async function carregaModelliUS(){
     sel.innerHTML = html;
     if (salvo){ if (lista.some(m=>m.id===salvo)) sel.value = salvo; else $("st-mod").value = salvo; }
   }catch(e){
+    if (seq !== modSeqUS || prov !== $("st-prov").value) return;
     sel.innerHTML = '<option value="__default__">⚠️ Elenco non caricato — predefinito (' + LLM_DEFAULT_MODEL[prov] + ")</option>";
+    const salvo = (getLLM().model || "").trim();
+    if (salvo) $("st-mod").value = salvo;
   }
 }
 // modello da usare: campo personalizzato, altrimenti selezione, altrimenti predefinito (gestito dal motore)
@@ -1494,41 +1581,56 @@ function carregaSettings(){
   const s = getLLM();
   $("st-prov").value = s.provider || "nessuno";
   $("st-key").value = s.key || "";
+  $("st-mod").value = "";
   aggiornaModelloWrap();
   $("st-stat").textContent = s.key ? "🟢 Chiave salvata (" + s.provider + ")" : "Nessuna chiave salvata.";
 }
-$("st-prov").addEventListener("change", aggiornaModelloWrap);
-$("st-modrl").addEventListener("click", carregaModelliUS);
+$("st-prov").addEventListener("change", ()=>{ $("st-mod").value=""; aggiornaModelloWrap(); });
+$("st-modsel").addEventListener("change", ()=>{ $("st-mod").value=""; });
+$("st-modrl").addEventListener("click", ()=>conLoadingUS("st-modrl", carregaModelliUS, "Caricamento…"));
 $("st-salva").addEventListener("click", ()=>{
-  GM_setValue("adm_llm", JSON.stringify({
+  salvaDato("adm_llm", JSON.stringify({
     provider: $("st-prov").value, model: modelloEffettivoUS(), key: $("st-key").value.trim()
   }));
   carregaSettings(); toast("Impostazioni salvate");
 });
-$("st-test").addEventListener("click", async ()=>{
+$("st-test").addEventListener("click", ()=>conLoadingUS("st-test", async ()=>{
   const keyT = $("st-key").value.trim();
   const provT = $("st-prov").value;
   if (provT === "nessuno" || !keyT){ toast("Scegli provider e incolla la chiave"); return; }
-  GM_setValue("adm_llm", JSON.stringify({ provider:provT, model:modelloEffettivoUS(), key:keyT }));
+  // Non persistere chiavi sbagliate finché l'utente non preme Salva.
+  const config = {provider:provT, model:modelloEffettivoUS(), key:keyT};
   $("st-stat").textContent = "⏳ Test in corso…";
   try{
-    await chatLLM("Sei un assistente di test. Rispondi solo: OK", "Di' OK.");
+    await chatLLM("Sei un assistente di test. Rispondi solo: OK", "Di' OK.", config);
     $("st-stat").textContent = "🟢 Connesso! Premi Salva per confermare.";
     toast("Connessione riuscita");
   }catch(e){
     $("st-stat").textContent = "🔴 " + e.message;
     toast("Test fallito");
   }
-});
+}, "Test in corso…"));
 $("st-canc").addEventListener("click", ()=>{
-  GM_setValue("adm_llm", "null");
+  rimuoviDato("adm_llm");
+  $("st-key").value = ""; $("st-mod").value = "";
   carregaSettings(); toast("Chiave rimossa");
 });
-$("st-ricarica").addEventListener("click", async ()=>{
-  $("st-fonte").textContent = "caricamento…";
+$("st-ricarica").addEventListener("click", ()=>conLoadingUS("st-ricarica", async ()=>{
+  $("st-fonte").textContent = "⏳ Caricamento…";
   const okc = await caricaMostriOnline();
-  $("st-fonte").textContent = state.fonte + (okc ? " — " + state.mostri.length + " mostri" : "");
-  toast(okc ? "Dati online caricati" : "Uso il dizionario locale");
+  $("st-fonte").textContent = okc ? state.fonte + " — " + state.mostri.length + " mostri"
+    : "⚠️ Errore di connessione: uso i dati locali (" + L_MOSTRI.length + " mostri).";
+  toast(okc ? "Dati online caricati" : "Errore di connessione: uso i dati locali");
+}, "Caricamento…"));
+$("st-reset").addEventListener("click", ()=>{
+  if (!confirm("Azzero chiave, ambientazione, iniziativa, gruppo e bioma salvati per Roll20?")) return;
+  ["adm_llm","adm_ambientazione","adm_iniziativa","adm_party","adm_biome"].forEach(rimuoviDato);
+  init = {lista:[], indice:-1, round:0};
+  $("np-amb").value = "";
+  $("ev-biome").value = "foresta";
+  $("st-key").value = "";
+  carregaSettings(); renderInit(); renderParty();
+  toast("Dati della campagna azzerati");
 });
 
 /* ============================================================
@@ -1538,8 +1640,13 @@ carregaSettings();
 renderInit();
 aggiornaBudget();
 renderParty();
+$("st-fonte").textContent = "Dati locali disponibili subito — collegamento API in corso…";
 caricaMostriOnline().then(okc=>{
-  $("st-fonte").textContent = state.fonte + (okc ? " — " + state.mostri.length + " mostri" : "");
+  $("st-fonte").textContent = okc ? state.fonte + " — " + state.mostri.length + " mostri"
+    : "⚠️ Errore di connessione: uso i dati locali (" + L_MOSTRI.length + " mostri).";
+  if (!okc) toast("Errore di connessione: uso i dati locali");
+}).catch(()=>{
+  $("st-fonte").textContent = "⚠️ Errore di connessione: uso i dati locali.";
 });
 avviaWatcher();
 

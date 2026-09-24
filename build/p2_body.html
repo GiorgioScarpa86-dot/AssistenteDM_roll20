@@ -2,8 +2,11 @@
 
 <header>
   <div class="logo">⚔️ ASSISTENTE DM <small>Dungeons &amp; Dragons 5e — per Dungeon Master</small></div>
-  <div class="chip" id="apiStatus">⏳ Caricamento dati SRD…</div>
+  <div class="chip" id="apiStatus">📚 Dati locali pronti · controllo API in corso…</div>
 </header>
+<div id="storageWarning" role="alert" style="display:none;padding:10px 20px;color:#ffd7d7;background:#4e1520">
+  ⚠️ Il browser blocca il salvataggio locale: puoi usare l'app, ma chiave, ambientazione e iniziativa non resteranno dopo la chiusura. Consenti i dati del sito nelle impostazioni del browser.
+</div>
 
 <nav class="tabs" id="tabNav">
   <button data-tab="monsters" class="active">📜 Mostri &amp; Regole</button>
@@ -167,7 +170,7 @@ Goblin 8"></textarea>
       <button class="btn danger" id="btnLLMClear">🗑 Rimuovi chiave</button>
     </div>
     <div id="llmStatus" class="hint"></div>
-    <p class="hint lock">🔒 SICUREZZA: la chiave resta salvata SOLO nel tuo browser (memoria locale). Non viene inviata da nessuna parte, se non direttamente al provider che scegli tu, e solo quando premi un bottone di generazione. Mai in questo file, mai in nessun altro server.</p>
+    <p class="hint lock">🔒 La chiave resta nel localStorage di questo browser, mai nel codice. Il browser la invia direttamente al provider scelto solo quando premi Testa connessione o generi con LLM. Il localStorage non è cifrato: usa una chiave dedicata con limiti di spesa e non aprire l'app su dispositivi condivisi.</p>
   </div>
   <div class="card">
     <h2>📦 Dati &amp; informazioni</h2>
@@ -183,3 +186,4 @@ Goblin 8"></textarea>
 
 <footer>Assistente DM 5e · Dati SRD 5.1 (OGL 1.0a) · Funziona anche offline con il dizionario incorporato</footer>
 <div id="toast"></div>
+<div id="globalErr" role="alert"></div>

@@ -22,6 +22,38 @@ function debounce(fn, ms){
   let t;
   return function(...a){ clearTimeout(t); t = setTimeout(()=>fn.apply(this,a), ms); };
 }
+// Stato di caricamento sul bottone: lo disabilita e mostra uno spinner,
+// così l'utente non clicca due volte pensando che l'app sia bloccata.
+// `fn` può essere sincrono o asincrono; il bottone si sblocca da solo a fine azione.
+function conLoading(b, fn, label){
+  if (!b || b.disabled) return; // già in caricamento: ignora il doppio click
+  const orig = b.innerHTML;
+  b.disabled = true;
+  b.innerHTML = '<span class="spin"></span> ' + esc(label || "In corso…");
+  let chiuso = false;
+  const fine = ()=>{
+    if (chiuso) return;
+    chiuso = true;
+    b.disabled = false;
+    b.innerHTML = orig;
+  };
+  return Promise.resolve().then(fn)
+    .catch(e=>{
+      console.error("Azione interrotta:", e);
+      mostraGlobalErr("Azione interrotta (" + (e?.message || "errore inatteso") + ")");
+    })
+    .finally(fine);
+}
+// Rete di sicurezza: un errore inatteso NON deve mai lasciare la pagina bianca
+// o bloccata — mostra un banner in alto, l'app resta pienamente usabile.
+function mostraGlobalErr(msg){
+  const g = $("globalErr");
+  if (!g) return;
+  g.textContent = "⚠️ " + msg + " — L'app resta usabile: puoi riprovare.";
+  g.classList.add("show");
+  clearTimeout(mostraGlobalErr.t);
+  mostraGlobalErr.t = setTimeout(()=>g.classList.remove("show"), 9000);
+}
 
 /* ---------- 5.2 Schede (tab) ---------- */
 function attivaTab(id){
@@ -39,17 +71,23 @@ function aggiornaChipApi(){
     chip.textContent = "🟢 Fonte: " + state.fonte;
     chip.className = "chip ok";
   } else {
-    chip.textContent = "🔴 Offline — dizionario locale attivo";
+    chip.textContent = "⚠️ Errore di connessione: uso i dati locali";
     chip.className = "chip err";
   }
   if (lab) lab.textContent = state.fonte;
 }
 
 /* ---------- 5.4 Ricerca mostri ---------- */
+// precalcola i nomi già normalizzati (una volta per fonte dati, non a ogni tasto):
+// la ricerca durante la digitazione resta fluida anche con 300+ mostri
+function preparaCerca(){
+  state.mostri.forEach(m=>{ m._l = norma(m.nome); });
+  state.incantesimi.forEach(s=>{ s._l = norma(s.nome + " " + (s.localeNome || "")); });
+}
 function trovaMostri(q){
-  q = (q||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  q = norma(q);
   if (!q) return state.mostri;
-  return state.mostri.filter(m=>m.nome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").includes(q));
+  return state.mostri.filter(m=>(m._l || norma(m.nome)).includes(q));
 }
 function renderMostri(lista){
   const box = $("monResults");
@@ -59,18 +97,23 @@ function renderMostri(lista){
   box.innerHTML = vis.map((m,i)=>`
     <div class="res-item" data-i="${i}">
       <span class="ri-nome">${esc(m.nome)}</span>
-      <span class="ri-cr">CR ${esc(crLabel(m.cr))}</span>
-      <span class="ri-xp">${m.xp} XP</span>
+      <span class="ri-cr">${m.cr == null ? "CR —" : "CR " + esc(crLabel(m.cr))}</span>
+      <span class="ri-xp">${m.xp == null ? "Apri la scheda" : esc(m.xp) + " XP"}</span>
     </div>`).join("");
   box.querySelectorAll(".res-item").forEach(el=>{
     el.addEventListener("click", ()=>apriMostro(vis[+el.dataset.i]));
   });
 }
+// guardia contro le "corse": se clicchi due mostri in rapida successione,
+// la scheda che si apre è sempre quella dell'ultimo click
+let monDetSeq = 0;
 async function apriMostro(m){
+  const seq = ++monDetSeq;
   const det = $("monDetail");
   det.style.display = "block";
   det.innerHTML = '<div class="empty"><span class="spin"></span> Caricamento scheda…</div>';
   let d = await dettaglioMostro(m);
+  if (seq !== monDetSeq) return; // arrivati in ritardo: un click più recente ha la precedenza
   if (!d || !d.nome){ det.innerHTML = '<div class="empty">Scheda non disponibile per ora (API offline).</div>'; return; }
   const AB_LAB = ["For","Des","Cos","Int","Sag","Car"];
   const abHtml = d.ab && d.ab.length ? `<div class="stat-grid">` + d.ab.map((v,i)=>`<div class="stat"><div class="s-val">${esc(v ?? "—")}</div><div class="s-lab">${AB_LAB[i]}</div></div>`).join("") + `</div>` : "";
@@ -103,10 +146,9 @@ async function apriMostro(m){
 
 /* ---------- 5.5 Ricerca incantesimi ---------- */
 function trovaIncantesimi(q){
-  q = (q||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  q = norma(q);
   if (!q) return state.incantesimi;
-  return state.incantesimi.filter(s => (s.nome||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").includes(q)
-    || (s.localeNome || "").toLowerCase().includes(q));
+  return state.incantesimi.filter(s => (s._l || norma(s.nome)).includes(q));
 }
 function renderIncantesimi(lista){
   const box = $("spellResults");
@@ -122,11 +164,14 @@ function renderIncantesimi(lista){
     el.addEventListener("click", ()=>apriIncantesimo(vis[+el.dataset.i]));
   });
 }
+let spellDetSeq = 0;
 async function apriIncantesimo(s){
+  const seq = ++spellDetSeq;
   const det = $("spellDetail");
   det.style.display = "block";
   det.innerHTML = '<div class="empty"><span class="spin"></span> Caricamento scheda…</div>';
   let d = await dettaglioIncantesimo(s);
+  if (seq !== spellDetSeq) return; // risposta in ritardo: un click più recente ha la precedenza
   if (!d || !d.nome){ det.innerHTML = '<div class="empty">Scheda non disponibile per ora (API offline).</div>'; return; }
   const L = d.liv === 0 ? "Incantesimo minore" : d.liv === 9 ? "9° livello" : d.liv + "° livello";
   det.innerHTML = `
@@ -167,14 +212,14 @@ function aggiornaTabellaBudget(){
 function generaScontro(){
   const p = parametriScontro();
   const res = generaIncontro(p.liv, p.pcs, p.diff);
-  localStorage.setItem("adm_ultimoIncontro", JSON.stringify(res));
+  memoria.setItem("adm_ultimoIncontro", JSON.stringify(res));
   const righe = res.list.map(g=>`${g.qta > 1 ? g.qta + " × " : ""}${g.nome}  —  CR ${crLabel(g.cr)}, ${g.xp} XP`).join("\n");
   const testo = `⚔️ INCONTRO — ${res.pcs} PG di livello ${res.livello} (${NOME_DIFF[res.diff]})\n` +
     `Budget: ${res.budget} XP\n\n${righe}\n\nTotale: ${res.totale} XP (${Math.round(res.quota*100)}% del budget)\n${etichettaQuota(res.quota)}`;
   $("encResult").innerHTML = `
     <div class="result-box">
       <div class="rb-titolo">⚔️ Incontro generato — ${NOME_DIFF[res.diff]}</div>
-      Budget: <b>${res.budget} XP</b> · ${res.pcs} PG · livello ${res.livello}\n\n${righe}\n
+      Budget: <b>${res.budget} XP</b> · ${res.pcs} PG · livello ${res.livello}\n\n${esc(righe)}\n
       <span style="color:var(--muto)">Totale: ${res.totale} XP (${Math.round(res.quota*100)}% del budget) — ${esc(etichettaQuota(res.quota))}</span>
       <div class="rb-copia"><button class="btn small" id="btnCopyEnc">📋 Copia incontro</button></div>
     </div>`;
@@ -183,15 +228,18 @@ function generaScontro(){
 }
 
 /* ---------- 5.7 Iniziativa ---------- */
-let init = (()=>{ try{ return JSON.parse(localStorage.getItem("adm_iniziativa")||"{}"); }catch(e){ return {}; } })();
-if (!Array.isArray(init.lista)) init.lista = [];
-if (!Number.isInteger(init.indice)) init.indice = -1;
-if (!Number.isInteger(init.round)) init.round = 0;
-function salvaInit(){ localStorage.setItem("adm_iniziativa", JSON.stringify(init)); }
+let init = (()=>{ try{ return JSON.parse(memoria.getItem("adm_iniziativa")||"{}"); }catch(e){ return {}; } })();
+if (!init || typeof init !== "object") init = {};
+init.lista = Array.isArray(init.lista)
+  ? init.lista.filter(x=>x && typeof x.nome==="string" && Number.isFinite(+x.init))
+      .map(x=>({nome:x.nome,init:+x.init})) : [];
+if (!Number.isInteger(init.indice) || init.indice >= init.lista.length) init.indice = -1;
+if (!Number.isInteger(init.round) || init.round < 0) init.round = 0;
+function salvaInit(){ memoria.setItem("adm_iniziativa", JSON.stringify(init)); }
 function aggiungiCombattente(nome, val){
   nome = String(nome||"").trim();
   if (!nome) { toast("Inserisci un nome", "err"); return; }
-  if (val == null || isNaN(+val)) { toast("Inserisci il valore del tiro", "err"); return; }
+  if (val == null || val === "" || !Number.isFinite(+val)) { toast("Inserisci il valore del tiro", "err"); return; }
   val = clamp(+val, 0, 30);
   const es = init.lista.find(x=>x.nome.toLowerCase() === nome.toLowerCase());
   if (es) es.init = val; else init.lista.push({nome, init:val});
@@ -263,8 +311,9 @@ function estraiIniziativaDaTesto(){
 }
 
 /* ---------- 5.8 PNG & Eventi ---------- */
-function boxRisultato(html, testoPulito, idContenitore){
+function boxRisultato(html, testoPulito, idContenitore, avviso = ""){
   $(idContenitore).innerHTML = `
+    ${avviso ? `<p class="hint" style="color:var(--err)" role="alert">⚠️ ${esc(avviso)}</p>` : ""}
     <div class="result-box">
       <div class="rb-titolo"></div>
       ${html}
@@ -288,13 +337,12 @@ async function generaNPC(){
       testo = generaPNGProc();
       if (amb) testo += "\n\n(Ambientazione di riferimento: " + amb + ")";
     }
-    boxRisultato(esc(testo), testo, "npResult");
+    boxRisultato(esc(testo), testo, "npResult", $("npLLM").checked && !usaLLM ? "Chiave LLM non configurata: genero con i dati locali. Per attivarla, vai in Impostazioni." : "");
     $("npResult").querySelector(".rb-titolo").textContent = "🎭 " + (usaLLM ? "PNG generato con LLM" : "PNG generato (procedurale)");
   }catch(e){
     if (usaLLM){
-      box.innerHTML = `<div class="empty">⚠️ LLM non raggiungibile (${esc(e.message)}). Uso il sistema procedurale al posto suo.</div>`;
       const testo = generaPNGProc() + (amb ? "\n\n(Ambientazione di riferimento: " + amb + ")" : "");
-      boxRisultato(esc(testo), testo, "npResult");
+      boxRisultato(esc(testo), testo, "npResult", "LLM non raggiungibile (" + e.message + "). Uso i dati locali.");
       $("npResult").querySelector(".rb-titolo").textContent = "🎭 PNG generato (procedurale, fallback)";
     } else {
       box.innerHTML = '<div class="empty">Errore: ' + esc(e.message) + "</div>";
@@ -317,14 +365,13 @@ async function generaEvento(){
       const e = generaEventoProc(idBioma);
       testo = "METEO: " + e.meteo + "\nIMPREVVISTO: " + e.evento;
     }
-    boxRisultato(esc(testo), testo, "evResult");
+    boxRisultato(esc(testo), testo, "evResult", $("evLLM").checked && !usaLLM ? "Chiave LLM non configurata: genero con i dati locali. Per attivarla, vai in Impostazioni." : "");
     $("evResult").querySelector(".rb-titolo").textContent = "🌩️ " + L_BIOMI[idBioma].icon + " " + L_BIOMI[idBioma].nome + (usaLLM ? " (LLM)" : "");
   }catch(e){
     if (usaLLM){
       const p = generaEventoProc(idBioma);
       const testo = "METEO: " + p.meteo + "\nIMPREVVISTO: " + p.evento;
-      box.innerHTML = '<div class="empty">⚠️ LLM non raggiungibile (' + esc(e.message) + "). Uso la tabella procedurale al posto suo.</div>";
-      boxRisultato(esc(testo), testo, "evResult");
+      boxRisultato(esc(testo), testo, "evResult", "LLM non raggiungibile (" + e.message + "). Uso i dati locali.");
       $("evResult").querySelector(".rb-titolo").textContent = "🌩️ " + L_BIOMI[idBioma].icon + " " + L_BIOMI[idBioma].nome + " (procedurale, fallback)";
     } else {
       box.innerHTML = '<div class="empty">Errore: ' + esc(e.message) + "</div>";
@@ -353,7 +400,7 @@ function generaLoot(){
 }
 function usaCRLultimoIncontro(){
   let u = null;
-  try{ u = JSON.parse(localStorage.getItem("adm_ultimoIncontro") || "null"); }catch(e){}
+  try{ u = JSON.parse(memoria.getItem("adm_ultimoIncontro") || "null"); }catch(e){}
   if (!u || !u.list || !u.list.length){ toast("Genera prima un incontro nella scheda Scontri", "err"); return; }
   // il CR "dominante" dell'incontro è quello del mostro principale (il primo in lista)
   const cr = u.list[0].cr;
@@ -367,6 +414,7 @@ function carregaSettings(){
   const s = getLLM();
   $("setProvider").value = s.provider || "nessuno";
   $("setKey").value = s.key || "";
+  $("setModel").value = ""; // elimina residui di una selezione precedente
   aggiornaModelloWrap();
   $("llmStatus").textContent = s.key ? "🟢 Chiave salvata per " + s.provider : "Nessuna chiave salvata — l'app usa i sistemi procedurali.";
 }
@@ -379,7 +427,9 @@ function aggiornaModelloWrap(){
   carregaModelli();
 }
 // compila il menu a tendina con i modelli gratuiti ATTUALI (OpenRouter/Groq)
+let modSeq = 0;
 async function carregaModelli(){
+  const seq = ++modSeq;
   const prov = $("setProvider").value;
   const sel = $("setModelSel");
   if (prov === "nessuno") return;
@@ -390,6 +440,7 @@ async function carregaModelli(){
   sel.innerHTML = '<option value="">⏳ Caricamento dell\'elenco modelli…</option>';
   try{
     const lista = await listaModelliFree(prov, $("setKey").value.trim());
+    if (seq !== modSeq || prov !== $("setProvider").value) return; // ignora risposta vecchia
     if (!lista || !lista.length) throw new Error("lista vuota");
     const salvo = (getLLM().model || "").trim();
     let html = '<option value="__default__">⚡ ' + LLM_DEFAULT_MODEL[prov] + "</option>";
@@ -400,7 +451,10 @@ async function carregaModelli(){
       else $("setModel").value = salvo; // modello salvato non più in elenco: resta nel campo personalizzato
     }
   }catch(e){
+    if (seq !== modSeq || prov !== $("setProvider").value) return;
     sel.innerHTML = '<option value="__default__">⚠️ Elenco non caricato (offline?) — verrà usato il predefinito (' + LLM_DEFAULT_MODEL[prov] + ")</option>";
+    const salvo = (getLLM().model || "").trim();
+    if (salvo) $("setModel").value = salvo; // offline: non perdere il modello personalizzato
   }
 }
 function salvaSettings(){
@@ -411,7 +465,7 @@ function salvaSettings(){
     model: custom || (selVal && selVal !== "__default__" ? selVal : ""),
     key: $("setKey").value.trim()
   };
-  localStorage.setItem("adm_llm", JSON.stringify(s));
+  memoria.setItem("adm_llm", JSON.stringify(s));
   $("llmStatus").textContent = s.provider !== "nessuno" && s.key ? "🟢 Salvo! Ora puoi spuntare 'Usa LLM' nelle schede PNG & Eventi." : "Impostazioni salvate.";
   toast("Impostazioni salvate", "ok");
 }
@@ -420,12 +474,13 @@ async function testaLLM(){
   const provTmp = $("setProvider").value;
   if (provTmp === "nessuno"){ toast("Scegli prima un provider", "err"); return; }
   if (!keyTmp){ toast("Incolla prima la chiave API", "err"); return; }
-  // salva temporaneamente e prova
-  const s = { provider:provTmp, model:$("setModel").value.trim(), key:keyTmp };
-  localStorage.setItem("adm_llm", JSON.stringify(s));
+  // Il test usa i campi della GUI senza salvare una chiave eventualmente errata.
+  const selVal = $("setModelSel").value;
+  const s = { provider:provTmp,
+    model:$("setModel").value.trim() || (selVal && selVal !== "__default__" ? selVal : ""), key:keyTmp };
   $("llmStatus").innerHTML = '<span class="spin"></span> Test in corso…';
   try{
-    await chatLLM("Sei un assistente di test. Rispondi solo: OK", "Di' OK.");
+    await chatLLM("Sei un assistente di test. Rispondi solo: OK", "Di' OK.", s);
     $("llmStatus").innerHTML = "🟡 Connesso! Ora premi <b>Salva</b> per confermare definitivamente.";
     toast("Connessione LLM riuscita!", "ok");
   }catch(e){
@@ -434,7 +489,7 @@ async function testaLLM(){
   }
 }
 function rimuoviChiave(){
-  localStorage.removeItem("adm_llm");
+  memoria.removeItem("adm_llm");
   $("setKey").value = ""; $("setModel").value = "";
   $("llmStatus").textContent = "Chiave rimossa.";
   toast("Chiave rimossa dal browser", "ok");
@@ -442,57 +497,96 @@ function rimuoviChiave(){
 
 /* ---------- 5.11 Avvio ---------- */
 function avvio(){
+  // Verifica reale della persistenza: se non disponibile, resta tutto usabile
+  // con dati temporanei, ma l'utente viene avvisato in modo permanente.
+  try{
+    localStorage.setItem("__adm_test__", "1"); localStorage.removeItem("__adm_test__");
+  }catch(e){ $("storageWarning").style.display = "block"; }
   // tab navigabili
-  // ricerca mostri e incantesimi
-  $("mqMon").addEventListener("input", debounce(()=>renderMostri(trovaMostri($("mqMon").value)), 250));
-  $("mqSpell").addEventListener("input", debounce(()=>renderIncantesimi(trovaIncantesimi($("mqSpell").value)), 250));
+  // ricerca mostri e incantesimi (debounce: la digitazione resta fluida)
+  const cercaMon = debounce(()=>renderMostri(trovaMostri($("mqMon").value)), 200);
+  $("mqMon").addEventListener("input", ()=>{
+    $("monCount").innerHTML = '<span class="spin"></span> Ricerca…';
+    cercaMon();
+  });
+  $("mqSpell").addEventListener("input", debounce(()=>renderIncantesimi(trovaIncantesimi($("mqSpell").value)), 200));
   // scontri
   ["encPC","encLvl","encDiff"].forEach(id=>$(id).addEventListener("input", aggiornaTabellaBudget));
   $("btnEncounter").addEventListener("click", generaScontro);
   // iniziativa
-  $("btnInitAdd").addEventListener("click", ()=>{ aggiungiCombattente($("initName").value, +$("initVal").value); $("initName").value=""; $("initVal").value=""; });
+  $("btnInitAdd").addEventListener("click", ()=>{ aggiungiCombattente($("initName").value, $("initVal").value); $("initName").value=""; $("initVal").value=""; });
   $("initName").addEventListener("keydown", e=>{ if (e.key === "Enter") $("btnInitAdd").click(); });
   $("initVal").addEventListener("keydown", e=>{ if (e.key === "Enter") $("btnInitAdd").click(); });
   $("btnInitParse").addEventListener("click", estraiIniziativaDaTesto);
   $("btnInitAdvance").addEventListener("click", avanzaTurno);
   $("btnInitClear").addEventListener("click", ()=>{ init.lista = []; init.indice = -1; init.round = 0; renderInit(); toast("Iniziativa svuotata", "ok"); });
-  // PNG & eventi
+  // PNG & eventi (con stato di caricamento visibile sul bottone)
   const selBiome = $("evBiome");
   selBiome.innerHTML = Object.keys(L_BIOMI).map(k=>`<option value="${k}">${L_BIOMI[k].icon} ${L_BIOMI[k].nome}</option>`).join("");
-  const biomaSalvo = localStorage.getItem("adm_biome");
+  const biomaSalvo = memoria.getItem("adm_biome");
   if (biomaSalvo && L_BIOMI[biomaSalvo]) selBiome.value = biomaSalvo;
-  selBiome.addEventListener("change", ()=>localStorage.setItem("adm_biome", selBiome.value));
-  $("btnNPC").addEventListener("click", generaNPC);
-  $("btnEvent").addEventListener("click", generaEvento);
+  selBiome.addEventListener("change", ()=>memoria.setItem("adm_biome", selBiome.value));
+  $("btnNPC").addEventListener("click", ()=>conLoading($("btnNPC"), generaNPC, "Generazione in corso…"));
+  $("btnEvent").addEventListener("click", ()=>conLoading($("btnEvent"), generaEvento, "Generazione in corso…"));
+  // l'ambientazione si salva da sola mentre scrivi: se chiudi la pagina la ritrovi uguale
+  $("npSetting").value = memoria.getItem("adm_ambientazione") || "";
+  // Salvataggio sincrono (stringhe corte): persiste anche se chiudi subito dopo aver scritto.
+  $("npSetting").addEventListener("input", ()=>memoria.setItem("adm_ambientazione", $("npSetting").value));
   // bottino
   $("btnLoot").addEventListener("click", generaLoot);
   $("btnLootCR").addEventListener("click", usaCRLultimoIncontro);
   // impostazioni
-  $("setProvider").addEventListener("change", aggiornaModelloWrap);
-  $("btnModelReload").addEventListener("click", carregaModelli);
+  $("setProvider").addEventListener("change", ()=>{ $("setModel").value=""; aggiornaModelloWrap(); });
+  // Una scelta esplicita dal menu sostituisce il precedente modello personalizzato.
+  $("setModelSel").addEventListener("change", ()=>{ $("setModel").value=""; });
+  $("btnModelReload").addEventListener("click", ()=>conLoading($("btnModelReload"), carregaModelli, "Caricamento…"));
   $("btnLLMSave").addEventListener("click", salvaSettings);
-  $("btnLLMTest").addEventListener("click", testaLLM);
+  $("btnLLMTest").addEventListener("click", ()=>conLoading($("btnLLMTest"), testaLLM, "Test in corso…"));
   $("btnLLMClear").addEventListener("click", rimuoviChiave);
   $("btnKeyEye").addEventListener("click", ()=>{ const k=$("setKey"); k.type = k.type === "password" ? "text" : "password"; });
   $("btnReset").addEventListener("click", ()=>{
-    if (!confirm("Sei sicuro? Verranno cancellate la chiave LLM, l'iniziativa e i dati salvati nel browser.")) return;
-    ["adm_llm","adm_iniziativa","adm_ultimoIncontro","adm_biome"].forEach(k=>localStorage.removeItem(k));
+    if (!confirm("Sei sicuro? Verranno cancellati la chiave LLM, l'ambientazione, l'iniziativa e tutti i dati salvati nel browser.")) return;
+    ["adm_llm","adm_iniziativa","adm_ultimoIncontro","adm_biome","adm_ambientazione"].forEach(k=>memoria.removeItem(k));
     init = {lista:[], indice:-1, round:0};
+    $("npSetting").value = "";
+    $("setKey").value = ""; $("setModel").value = "";
+    carregaSettings(); // svuota anche i campi visibili (non solo localStorage)
+    $("evBiome").value = "foresta";
     toast("Tutti i dati locali azzerati", "ok");
     renderInit();
   });
-  // prime renderizzazioni
+  // rete di sicurezza: nessun errore inatteso deve mai bloccare la pagina o lasciarla bianca
+  window.addEventListener("unhandledrejection", e=>{
+    const msg = (e.reason && (e.reason.message || String(e.reason))) || "errore imprevisto";
+    console.error("Operazione interrotta:", e.reason);
+    mostraGlobalErr("Qualcosa non ha funzionato (" + msg + ")");
+  });
+  window.addEventListener("error", e=>{
+    // gli errori di caricamento di risorse (font, immagini) sono normali quando sei offline: li ignora
+    if (!e.message || /resource|net::|favicon|css|font/i.test(e.message)) return;
+    console.error(e.error || e.message);
+    mostraGlobalErr(e.message || "Errore interno");
+  });
+  // prime renderizzazioni (con dati locali già disponibili: l'app è subito usabile)
+  preparaCerca();
   renderMostri(state.mostri);
   renderIncantesimi(state.incantesimi);
   aggiornaTabellaBudget();
   renderInit();
-  aggiornaChipApi();
   carregaSettings();
-  // poi prova a collegarsi all'API (l'app nel frattempo resta pienamente usabile)
+  // poi prova a collegarsi all'API (l'app nel frattempo resta pienamente usabile).
+  // La chip in alto resta "⏳ Caricamento…" finché non c'è un esito.
   caricaDatiApi((cosa)=>{
     aggiornaChipApi();
-    if (cosa === "monsters"){ renderMostri(state.mostri); toast("🟢 Collegato all'API SRD: " + state.fonte, "ok"); }
-    if (cosa === "spells") renderIncantesimi(state.incantesimi);
-  }).catch(()=>{ aggiornaChipApi(); });
+    if (cosa === "monsters"){ renderMostri(trovaMostri($("mqMon").value)); toast("🟢 Collegato all'API SRD: " + state.fonte, "ok"); }
+    if (cosa === "spells") renderIncantesimi(trovaIncantesimi($("mqSpell").value));
+  }).then(res=>{
+    aggiornaChipApi();
+    if (!res.okMon) toast("⚠️ Errore di connessione all'API mostri: uso i dati locali incorporati", "err");
+    if (!res.okSpell) toast("⚠️ Errore di connessione all'API incantesimi: uso i dati locali", "err");
+  }).catch(()=>{
+    aggiornaChipApi();
+    toast("⚠️ Errore di connessione: uso i dati locali incorporati", "err");
+  });
 }
 avvio();

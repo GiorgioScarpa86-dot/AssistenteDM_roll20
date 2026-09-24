@@ -12,12 +12,14 @@ offline incorporato).
 | [`assistente_dm.html`](assistente_dm.html) | **App standalone** in un unico file: apri con doppio clic nel browser (stile dark fantasy, responsive, funziona anche offline) |
 | [`assistente_dm_roll20.user.js`](assistente_dm_roll20.user.js) | **Script Tampermonkey** che integra l'assistente in un pannello fluttuante dentro Roll20, con lettura automatica della chat per l'iniziativa |
 | [`ISTRUZIONI.md`](ISTRUZIONI.md) | **Guida passo-passo** (click per click) per installarla e usarla senza saper programmare |
+| [`CODICE_COMPLETO.md`](CODICE_COMPLETO.md) | **Entrambi i blocchi integrali** (HTML e Tampermonkey) da prima a ultima riga, senza segnaposto |
 
 ## ✨ Funzionalità
 
 - **Mostri & Regole** — ricerca mostri e incantesimi dal SRD via API pubblica
-  (`5e-srdapi.com`, con fallback su `dnd5eapi.co` e su un dizionario locale
-  incorporato di 27 mostri + 28 incantesimi se offline).
+  (`dnd5eapi.co`, con fonte alternativa `5e-srdapi.com` e un dizionario locale
+  incorporato di 26 mostri + 29 incantesimi se offline). Gli scontri usano
+  CR/XP locali verificati quando l'indice API non li include.
 - **Scontri bilanciati** — budget XP per difficoltà (Facile/Medio/Difficile/
   Mortale) calcolato con le tabelle DMG 5e + generatore di incontri.
 - **Iniziativa** — tracciatore ordinato con avanza-turno; nella versione

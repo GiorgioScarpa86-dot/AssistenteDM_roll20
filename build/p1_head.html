@@ -102,6 +102,7 @@ section.tab.active{ display:block; }
 .card h3{ font-size:14px; color:var(--oro2); margin:14px 0 8px; text-transform:uppercase; letter-spacing:1px; }
 .hint{ color:var(--muto); font-size:13px; margin:8px 0; }
 .hint.lock{ background:rgba(84,194,136,.07); border:1px dashed rgba(84,194,136,.35); border-radius:8px; padding:8px 10px; }
+#llmStatus{ white-space:pre-wrap; overflow-wrap:anywhere; }
 /* ---------- FORM ---------- */
 label{ display:block; font-size:13.5px; color:var(--muto); margin:10px 0 4px; }
 input[type=text], input[type=number], input[type=password], select, textarea{
@@ -216,6 +217,14 @@ table.tbl td.num{ text-align:right; font-variant-numeric:tabular-nums; }
 /* ---------- SPINNER ---------- */
 .spin{ display:inline-block; width:14px; height:14px; border:2px solid var(--bordo); border-top-color:var(--oro); border-radius:50%; animation:rot 1s linear infinite; vertical-align:-2px; }
 @keyframes rot{ to{ transform:rotate(360deg);} }
+/* ---------- BANNER ERRORE GENERALE (nessuna schermata bianca, mai) ---------- */
+#globalErr{
+  display:none; position:fixed; left:50%; bottom:74px; transform:translateX(-50%);
+  max-width:90vw; z-index:300;
+  background:rgba(227,93,93,.14); border:1px solid var(--err); color:#ffd7d7;
+  border-radius:10px; padding:10px 16px; font-size:13px; box-shadow:0 8px 30px rgba(0,0,0,.5);
+}
+#globalErr.show{ display:block; }
 footer{ text-align:center; color:var(--muto); font-size:12px; padding:0 20px 30px; }
 </style>
 </head>

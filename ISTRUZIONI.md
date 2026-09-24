@@ -34,7 +34,7 @@ gestisce l'iniziativa al volo.
 ## Passaggio 2 — Controlla la fonte dati
 In alto a destra c'è una "pillola" di stato:
 - **🟢 Fonte: D&D 5e SRD API** → sei online: hai a disposizione l'intero dizionario SRD (334 mostri, tutti gli incantesimi).
-- **🔴 Offline — dizionario locale** → non c'è internet (o l'API è giù): l'app usa comunque il dizionario incorporato (27 mostri essenziali + 28 incantesimi). **Tutto funziona comunque.**
+- **⚠️ Errore di connessione: uso i dati locali** → non c'è internet, l'API è giù oppure il browser blocca la richiesta (CORS). Il dizionario incorporato (26 mostri essenziali + 29 incantesimi) e gli scontri sono disponibili da subito, senza aspettare l'API. Le voci non incorporate non avranno la scheda completa finché la connessione non torna.
 
 ## Passaggio 3 — Le 5 schede (in alto)
 
@@ -177,11 +177,17 @@ Stesse funzioni della App standalone, compresse nel pannello (schede in alto).
 Come funziona in modo sicuro:
 - **Incolli la chiave** nel campo della scheda **Impostazioni** (App) o nella
   scheda **⚙️** (pannello Roll20).
-- Viene salvata **solo nella memoria locale del TUO browser** (localStorage /
-  memoria di Tampermonkey). Non è scritta nel codice, non passa da nessun
-  server di alcun tipo, e viene inviata **solo** al provider che scegli tu,
-  **solo** quando premi "Genera" con l'opzione LLM attiva.
-- Puoi cancellarla in qualsiasi momento col bottone **🗑 Rimuovi chiave**.
+- Premere **Testa connessione** non salva la chiave: per conservarla premi **Salva**.
+  Chiave, ambientazione e iniziativa vengono conservate nel **localStorage del browser**
+  (se bloccato, lo script Roll20 ripiega sulla memoria Tampermonkey; l'app ti avvisa
+  che i dati temporanei non sopravvivranno alla chiusura).
+- La chiave **non è scritta nel codice**. Il browser la invia direttamente al
+  provider scelto **solo** quando premi **Testa connessione** o generi con LLM;
+  non la manda al nostro server. Il localStorage **non è cifrato** e gli altri
+  script della stessa pagina Roll20 possono potenzialmente leggerlo: usa una
+  chiave dedicata con limiti di spesa e non usare dispositivi condivisi.
+- Puoi cancellarla col bottone **🗑 Rimuovi chiave**. Su Roll20, la memoria è
+  legata al dominio: usa sempre lo stesso browser e indirizzo per ritrovare i dati.
 
 ## Dove si prendono chiavi GRATUITE
 
@@ -238,7 +244,7 @@ sistema procedurale (il PNG/imprevisto te lo dà lo stesso).
 | **Copiare** il testo non funziona | Alcune versioni di browser bloccano la copia in `file://`: seleziona manualmente il testo nel riquadro e fai Ctrl+C. Oppure usa l'app nel browser dopo averla caricata su un'URL http. |
 | Voglio **riaprire il pannello** chiuso in Roll20 | Menu Tampermonkey → **"Apri Assistente DM"** (oppure ricarica la pagina). |
 | L'app mi chiede il permesso di fare qualcosa | Puoi sempre negare: le uniche richieste sono la **rete** (per le API) e la **memoria locale** (per ricordarsi le tue scelte). |
-| **Cancello tutto** e ricomincio? | Scheda Impostazioni → **⚠️ Azzera tutti i dati locali**. (In Roll20: la memoria di Tampermonkey si cancella dal suo pannello, sezione "Valori".) |
+| **Cancello tutto** e ricomincio? | Nell'app standalone: Impostazioni → **⚠️ Azzera tutti i dati locali**. In Roll20: scheda ⚙️ → **⚠️ Azzera dati salvati della campagna** (dopo conferma cancella chiave, ambientazione, iniziativa, party e bioma). Il pulsante **🗑** in ⚙️ cancella solo la chiave. |
 
 ---
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Assistente DM — Pannello integrato per Roll20
 // @namespace    assistente-dm.roll20
-// @version      1.0.0
+// @version      1.1.0
 // @description  Assistente per Dungeon Master D&D 5e: intercetta i tiri di iniziativa dalla chat di Roll20, genera scontri bilanciati, PNG coerenti, bottino e imprevisti. Zero codice: installalo e usalo.
 // @author       AssistenteDM
 // @match        https://app.roll20.net/*
@@ -9,6 +9,11 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_registerMenuCommand
+// @connect      www.dnd5eapi.co
+// @connect      openrouter.ai
+// @connect      api.groq.com
+// @connect      api-inference.huggingface.co
 // @run-at       document-idle
 // ==/UserScript==
 /* ============================================================
@@ -78,7 +83,11 @@ const CSS = `
 .adm-btn.gold{ background:linear-gradient(180deg,#f2dc82,#d4af37 55%,#8a6d1d); color:#1c1503; border-color:#f2dc82; }
 .adm-btn.gold:hover{ filter:brightness(1.08); color:#120d01; }
 .adm-btn.danger{ color:#e35d5d; border-color:rgba(227,93,93,.4); }
+.adm-btn:disabled{ opacity:.6; cursor:wait; pointer-events:none; }
+.adm-spin{ display:inline-block; width:12px; height:12px; border:2px solid #6b6051; border-top-color:#d4af37; border-radius:50%; animation:admrot .8s linear infinite; vertical-align:-2px; }
+@keyframes admrot{ to{transform:rotate(360deg)} }
 .adm-hint{ color:#9a93a6; font-size:11.5px; margin:5px 0; }
+#adm-panel #st-stat{ white-space:pre-wrap; overflow-wrap:anywhere; }
 .adm-res{
   background:rgba(0,0,0,.3); border:1px solid #30303e; border-left:3px solid #d4af37;
   border-radius:8px; padding:10px 11px; margin-top:10px; white-space:pre-wrap; font-size:12.5px;
