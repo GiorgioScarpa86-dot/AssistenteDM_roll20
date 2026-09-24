@@ -1,0 +1,189 @@
+<body>
+
+<header>
+  <div class="logo">⚔️ ASSISTENTE DM <small>Dungeons &amp; Dragons 5e — per Dungeon Master</small></div>
+  <div class="chip" id="apiStatus">📚 Dati locali pronti · controllo API in corso…</div>
+</header>
+<div id="storageWarning" role="alert" style="display:none;padding:10px 20px;color:#ffd7d7;background:#4e1520">
+  ⚠️ Il browser blocca il salvataggio locale: puoi usare l'app, ma chiave, ambientazione e iniziativa non resteranno dopo la chiusura. Consenti i dati del sito nelle impostazioni del browser.
+</div>
+
+<nav class="tabs" id="tabNav">
+  <button data-tab="monsters" class="active">📜 Mostri &amp; Regole</button>
+  <button data-tab="battle">⚔️ Scontri &amp; Iniziativa</button>
+  <button data-tab="npcevents">🎭 PNG &amp; Eventi</button>
+  <button data-tab="loot">💰 Bottino</button>
+  <button data-tab="settings">⚙️ Impostazioni</button>
+</nav>
+
+<main>
+
+<!-- ================= SCHEDA 1: MOSTRI E REGOLE ================= -->
+<section class="tab active" id="tab-monsters">
+  <div class="card">
+    <h2>🔍 Cerca un mostro (dizionario SRD)</h2>
+    <p class="hint">I dati arrivano in tempo reale dall'API pubblica del System Reference Document (OGL 1.0a). Se non sei online, viene usato il dizionario locale incorporato.</p>
+    <div class="row">
+      <div class="grow"><input type="text" id="mqMon" placeholder="Scrivi qui per cercare… es. Goblin, Troll, Drider, Drago"></div>
+      <span class="chip" id="monCount">—</span>
+    </div>
+    <div class="results" id="monResults"></div>
+  </div>
+  <div class="card" id="monDetail" style="display:none"></div>
+  <div class="card">
+    <h2>✨ Cerca un incantesimo</h2>
+    <div class="row">
+      <div class="grow"><input type="text" id="mqSpell" placeholder="Scrivi qui per cercare… es. Palla di Fuoco, Scudo, Volo"></div>
+      <span class="chip" id="spellCount">—</span>
+    </div>
+    <div class="results" id="spellResults"></div>
+  </div>
+  <div class="card" id="spellDetail" style="display:none"></div>
+</section>
+
+<!-- ================= SCHEDA 2: SCONTRI E INIZIATIVA ================= -->
+<section class="tab" id="tab-battle">
+  <div class="grid2">
+    <div class="card">
+      <h2>⚖️ Generatore di scontri bilanciati</h2>
+      <p class="hint">Budget calcolato con le tabelle ufficiali della Guida del Dungeon Master 5e (XP per livello × numero di PG × moltiplicatore di difficoltà).</p>
+      <div class="row">
+        <div class="grow"><label>Personaggi Giocanti</label><input type="number" id="encPC" value="4" min="1" max="8"></div>
+        <div class="grow"><label>Livello dei PG</label><input type="number" id="encLvl" value="5" min="1" max="20"></div>
+        <div class="grow"><label>Difficoltà</label>
+          <select id="encDiff">
+            <option value="facile">🟢 Facile</option>
+            <option value="medio" selected>🟡 Medio</option>
+            <option value="difficile">🟠 Difficile</option>
+            <option value="mortale">🔴 Mortale</option>
+          </select>
+        </div>
+      </div>
+      <table class="tbl" id="encTable">
+        <thead><tr><th>Difficoltà</th><th class="num">Budget XP</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row" style="margin-top:14px">
+        <button class="btn gold" id="btnEncounter">⚔️ Genera Incontro Bilanciato</button>
+      </div>
+      <div id="encResult"></div>
+    </div>
+
+    <div class="card">
+      <h2>🎲 Tracciatore di Iniziativa</h2>
+      <p class="hint">Aggiungi i combattenti a mano oppure incolla qui sotto il testo della chat di Roll20: l'app riconosce i tiri d20 e ordina la lista da sola.</p>
+      <div class="row">
+        <div class="grow"><input type="text" id="initName" placeholder="Nome (es. Fia, Golem…)"></div>
+        <div style="width:90px"><input type="number" id="initVal" placeholder="Tiro" min="0" max="30"></div>
+        <button class="btn" id="btnInitAdd">+ Aggiungi</button>
+      </div>
+      <textarea id="initPaste" placeholder="Incolla la chat Roll20 qui (una riga per tiro), es.:
+Fia [d20+4] 23
+Orco: 12
+Goblin 8"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="btnInitParse">📥 Estrai tiri dal testo</button>
+        <button class="btn gold" id="btnInitAdvance">▶ Avanza Turno</button>
+        <button class="btn danger" id="btnInitClear">🗑 Pulisci</button>
+      </div>
+      <div class="turno-banner" id="turnoBanner" style="display:none">—</div>
+      <ol class="init-list" id="initList"></ol>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SCHEDA 3: PNG E EVENTI ================= -->
+<section class="tab" id="tab-npcevents">
+  <div class="card">
+    <h2>🎭 Generatore di PNG coerenti</h2>
+    <p class="hint">Descrivi in una o due righe la tua ambientazione: il PNG sarà coerente con essa. Senza chiave LLM usa il sistema procedurale (sempre disponibile); con una chiave (scheda Impostazioni) usa un modello linguistico per risultati più ricchi.</p>
+    <label>Ambientazione della campagna</label>
+    <textarea id="npSetting" placeholder="Es. Città portuale corrotta, toni dark fantasy, scarsa magia, influenza dei culti degli abissi…"></textarea>
+    <div class="row" style="margin-top:12px">
+      <label style="display:flex;align-items:center;gap:7px;margin:0"><input type="checkbox" id="npLLM" style="width:auto"> Usa LLM (se configurato)</label>
+      <button class="btn gold" id="btnNPC">✨ Genera PNG</button>
+    </div>
+    <div id="npResult"></div>
+  </div>
+  <div class="card">
+    <h2>🌩️ Meteo &amp; Imprevisti di viaggio</h2>
+    <p class="hint">Scegli il bioma attuale: ottieni meteo + un imprevisto ambientale o narrativo compatibile, pronto da leggere ai PG.</p>
+    <div class="row">
+      <div class="grow"><label>Bioma attuale</label><select id="evBiome"></select></div>
+      <label style="display:flex;align-items:center;gap:7px;margin:0"><input type="checkbox" id="evLLM" style="width:auto"> Usa LLM (se configurato)</label>
+      <button class="btn gold" id="btnEvent">🎲 Genera Imprevisto</button>
+    </div>
+    <div id="evResult"></div>
+  </div>
+</section>
+
+<!-- ================= SCHEDA 4: BOTTINO ================= -->
+<section class="tab" id="tab-loot">
+  <div class="card">
+    <h2>💰 Generatore di bottino</h2>
+    <p class="hint">Monete (rame, argento, oro, platino) e oggetti magici del SRD (licenza OGL 1.0a), in base al Grado di Sfida (CR) dell'incontro appena superato.</p>
+    <div class="row">
+      <div class="grow"><label>Grado di Sfida dell'incontro</label>
+        <select id="lootCR">
+          <option value="0-4">CR 0 – 4</option>
+          <option value="5-10">CR 5 – 10</option>
+          <option value="11-16">CR 11 – 16</option>
+          <option value="17+">CR 17 e oltre</option>
+        </select>
+      </div>
+      <button class="btn small" id="btnLootCR" title="Prende il CR medio dell'ultimo incontro generato">⚡ Usa CR ultimo incontro</button>
+      <button class="btn gold" id="btnLoot">🎲 Genera Bottino</button>
+    </div>
+    <div id="lootResult"></div>
+  </div>
+</section>
+
+<!-- ================= SCHEDA 5: IMPOSTAZIONI ================= -->
+<section class="tab" id="tab-settings">
+  <div class="card">
+    <h2>🔑 Chiave LLM (facoltativa)</h2>
+    <p class="hint">Opzionale al 100%: serve solo per PNG e imprevisti "intelligenti" (schede 2 e 3). Senza chiave, tutto funziona comunque con i sistemi procedurali interni.</p>
+    <label>Provider (piani gratuiti disponibili)</label>
+    <select id="setProvider">
+      <option value="nessuno">Nessuno (solo sistemi procedurali)</option>
+      <option value="openrouter">OpenRouter — openrouter.ai (ha modelli gratis con ":free")</option>
+      <option value="groq">Groq — console.groq.com (chiave gratuita)</option>
+      <option value="huggingface">Hugging Face — huggingface.co (chiave gratuita)</option>
+    </select>
+    <div id="modelWrap" style="display:none">
+      <label>Modello — scegli dall'elenco (per OpenRouter si carica DA SOLO con i modelli gratis di oggi)</label>
+      <div class="row">
+        <div class="grow"><select id="setModelSel"></select></div>
+        <button class="btn small" id="btnModelReload" title="Ricarica l'elenco dei modelli">🔄</button>
+      </div>
+      <label>Modello personalizzato (opzionale): se vuoi un modello non in elenco, scrivilo qui — ha la precedenza</label>
+      <input type="text" id="setModel" placeholder="es. qwen/qwen3.8-27b:free">
+    </div>
+    <label>Chiave API</label>
+    <div class="row">
+      <div class="grow"><input type="password" id="setKey" placeholder="Incolla qui la tua chiave…"></div>
+      <button class="btn small" id="btnKeyEye" title="Mostra/nascondi">👁</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="btnLLMSave">💾 Salva</button>
+      <button class="btn" id="btnLLMTest">📡 Testa connessione</button>
+      <button class="btn danger" id="btnLLMClear">🗑 Rimuovi chiave</button>
+    </div>
+    <div id="llmStatus" class="hint"></div>
+    <p class="hint lock">🔒 La chiave resta nel localStorage di questo browser, mai nel codice. Il browser la invia direttamente al provider scelto solo quando premi Testa connessione o generi con LLM. Il localStorage non è cifrato: usa una chiave dedicata con limiti di spesa e non aprire l'app su dispositivi condivisi.</p>
+  </div>
+  <div class="card">
+    <h2>📦 Dati &amp; informazioni</h2>
+    <p class="hint">Fonte dati mostri/incantesimi: <b id="srcLabel" style="color:var(--oro2)">—</b></p>
+    <p class="hint">Tutti i dati di gioco provengono dal <b>System Reference Document 5.1</b> di D&amp;D, pubblicato con licenza <b>OGL 1.0a</b> (open content, privo di copyright restrittivo). Le tabelle XP e di difficoltà seguono la Guida del Dungeon Master 5e (metodo di calcolo, non testo copiato).</p>
+    <div class="row">
+      <button class="btn danger" id="btnReset">⚠️ Azzera tutti i dati locali (chiavi, iniziativa, incontri)</button>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>Assistente DM 5e · Dati SRD 5.1 (OGL 1.0a) · Funziona anche offline con il dizionario incorporato</footer>
+<div id="toast"></div>
+<div id="globalErr" role="alert"></div>
