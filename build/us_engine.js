@@ -47,7 +47,14 @@ function gmFetchJSON(url, opts){
             catch(e){ reject(new Error("risposta non JSON (HTTP " + r.status + ")")); }
           } else {
             let msg = "HTTP " + r.status;
-            try{ const j = JSON.parse(r.responseText); msg = (j.error && (j.error.message || j.message)) || j.message || j.detail || msg; if (typeof msg !== "string") msg = JSON.stringify(msg); }catch(e){}
+            try{
+              const j = JSON.parse(r.responseText);
+              msg = (j.error && (j.error.message || j.message)) || j.message || j.detail || msg;
+              if (typeof msg !== "string") msg = JSON.stringify(msg);
+              // OpenRouter nasconde l'errore reale del provider in error.metadata.raw: mostralo
+              const raw = j.error && j.error.metadata && j.error.metadata.raw;
+              if (raw) msg += " · dettaglio: " + (typeof raw === "string" ? raw : JSON.stringify(raw)).slice(0, 300);
+            }catch(e){}
             reject(new Error(msg));
           }
         },
@@ -293,14 +300,34 @@ function chatLLM(sys, user){
     url = "https://api-inference.huggingface.co/models/" + encodeURIComponent(model) + "/v1/chat/completions";
     headers.Authorization = "Bearer " + s.key;
   } else return Promise.reject(new Error("Provider sconosciuto"));
-  return gmFetchJSON(url, {method:"POST", headers, body, timeout:30000}).then(j=>{
-    const txt = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-    if (!txt) throw new Error("Risposta vuota dal modello");
-    return txt.trim();
-  });
+  const opts = {method:"POST", headers, body, timeout:30000};
+  const TRANSITORIO = /provider returned error|overloaded|rate.?limit|too many requests|capacity|timeout/i;
+  // se l'errore è un sovraccarico "di momento", aspetta 1,5 s e riprova una volta
+  return gmFetchJSON(url, opts)
+    .catch(e=>{
+      if (TRANSITORIO.test(e.message)) return new Promise(r=>setTimeout(r,1500)).then(()=>gmFetchJSON(url, opts));
+      throw e;
+    })
+    .then(j=>{
+      const txt = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+      if (!txt) throw new Error("Risposta vuota dal modello");
+      return txt.trim();
+    })
+    .catch(e=>{ throw new Error(hintErroreLLM(e.message)); });
 }
 const PROMPT_SYS_NPC = "Sei un creativo di campagne per Dungeons & Dragons 5e, specializzato in personaggi non giocanti memorabili e coerenti con l'ambientazione del master. Rispondi SEMPRE in italiano e SOLO con la scheda richiesta, in questo formato esatto (una riga per campo):\nNOME: ...\nRAZZA E RUOLO: ...\nETÀ E ASPETTO: ...\nTRATTO CARATTERIALE: ...\nIDEALE E COLLEGAMENTO: ...\nSEGRETO: ...\nAGGANCIO ALLA TRAMA: ...\nFRASE ICONICA: \"...\"";
 const PROMPT_SYS_EVENT = "Sei un master di D&D 5e. Rispondi SEMPRE in italiano e SOLO con un evento, in questo formato esatto (una riga per campo):\nMETEO: ...\nIMPREVVISTO: ...\nDETTAGLI: ...";
+
+// suggerimento pratico per gli errori più comuni dei modelli gratuiti
+function hintErroreLLM(msg){
+  if (/provider returned error|overloaded|rate.?limit|too many requests|capacity/i.test(msg)){
+    return msg + "\n\n💡 I modelli gratuiti di OpenRouter sono condivisi e possono essere sovraccarichi. Aspetta 1-2 minuti e riprova, oppure scegli un modello diverso dal menu (ognuno è ospitato da un provider diverso). Se l'errore continua con TUTTI i modelli, controlla il motivo esatto su https://openrouter.ai/activity.";
+  }
+  if (/key|invalid|unauthorized|forbidden/i.test(msg)){
+    return msg + "\n\n💡 Verifica di aver incollato la chiave corretta (OpenRouter → Keys) senza spazi aggiuntivi.";
+  }
+  return msg;
+}
 
 /* --- copia negli appunti --- */
 function copiaTesto(testo){
