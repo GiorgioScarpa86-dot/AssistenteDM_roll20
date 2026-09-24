@@ -620,8 +620,10 @@ const LOOT_TIERS = {
 const LOOT_VAL_TIERS = { comune:25, noncomune:200, raro:2000 };
 
 /* --- LLM: provider e modelli di default (tutti con piano gratuito) --- */
+// Nota: l'elenco dei modelli ":free" di OpenRouter ruota di mese in mese;
+// l'app carica l'elenco ATTUALE direttamente da OpenRouter (vedi scheda Impostazioni).
 const LLM_DEFAULT_MODEL = {
- openrouter: "meta-llama/llama-3.1-8b-instruct:free",
+ openrouter: "google/gemma-4-31b-it:free",
  groq: "llama-3.3-70b-versatile",
  huggingface: "mistralai/Mistral-7B-Instruct-v0.2"
 };
@@ -823,6 +825,32 @@ function parseIniziativa(testo){
     }
   }
   return out;
+}
+
+/* --- Elenco modelli gratuiti attuali (OpenRouter: API pubblica; Groq: con chiave) --- */
+async function listaModelliFree(provider, key){
+  if (provider === "openrouter"){
+    const j = await gmFetchJSON("https://openrouter.ai/api/v1/models", {timeout:12000});
+    const arr = Array.isArray(j) ? j : (j.data || []);
+    const out = [];
+    for (const m of arr){
+      const id = m.id || "";
+      if (!id.endsWith(":free")) continue;
+      const arch = m.architecture || {};
+      const inp = (arch.input_modalities || []).join(",");
+      const outm = (arch.output_modalities || []).join(",");
+      if (!/text/.test(inp) || !/text/.test(outm)) continue;
+      if (/embedding|rerank|tts|transcribe|speech|caption/i.test(id)) continue;
+      const ctx = m.context_length ? " · " + Math.round(m.context_length/1000) + "K ctx" : "";
+      out.push({ id, nome: (m.name || id) + ctx });
+    }
+    return out.sort((a,b)=>a.id.localeCompare(b.id));
+  }
+  if (provider === "groq" && key){
+    const j = await gmFetchJSON("https://api.groq.com/openai/v1/models", {timeout:12000, headers:{Authorization:"Bearer "+key}});
+    return (j.data || []).map(m=>({id:m.id, nome:m.id})).sort((a,b)=>a.id.localeCompare(b.id));
+  }
+  return null;
 }
 
 /* --- PNG / Eventi / Bottino: stessa logica della standalone --- */
@@ -1028,7 +1056,12 @@ P.innerHTML = `
         <option value="groq">Groq</option>
         <option value="huggingface">Hugging Face</option>
       </select>
-      <label>Modello (predefinito suggerito)</label>
+      <label>Modello (l'elenco dei modelli gratis si carica da solo)</label>
+      <div class="adm-row">
+        <select id="st-modsel" class="grow"></select>
+        <button class="adm-btn" id="st-modrl" title="Ricarca l'elenco">🔄</button>
+      </div>
+      <label>Modello personalizzato (opzionale, ha la precedenza)</label>
       <input id="st-mod" placeholder="">
       <label>Chiave API</label>
       <input id="st-key" type="password" placeholder="Incolla la chiave…">
@@ -1397,22 +1430,51 @@ $("ev-gen").addEventListener("click", async ()=>{
 /* ============================================================
    IMPOSTAZIONI LLM
    ============================================================ */
-function aggiornaPlaceholder(){
+function aggiornaModelloWrap(){
   const p = $("st-prov").value;
   $("st-mod").placeholder = p === "nessuno" ? "—" : "Predefinito: " + LLM_DEFAULT_MODEL[p];
+  carregaModelliUS();
+}
+// compila il menu a tendina con i modelli gratuiti ATTUALI
+async function carregaModelliUS(){
+  const prov = $("st-prov").value;
+  const sel = $("st-modsel");
+  if (prov === "nessuno"){ sel.innerHTML = ""; return; }
+  if (prov === "huggingface"){
+    sel.innerHTML = '<option value="__default__">⚡ Predefinito: ' + LLM_DEFAULT_MODEL[prov] + "</option>";
+    return;
+  }
+  sel.innerHTML = '<option value="">⏳ Caricamento…</option>';
+  try{
+    const lista = await listaModelliFree(prov, $("st-key").value.trim());
+    if (!lista || !lista.length) throw new Error("vuota");
+    const salvo = (getLLM().model || "").trim();
+    let html = '<option value="__default__">⚡ ' + LLM_DEFAULT_MODEL[prov] + "</option>";
+    for (const m of lista) html += '<option value="' + esc(m.id) + '">' + esc(m.nome) + "</option>";
+    sel.innerHTML = html;
+    if (salvo){ if (lista.some(m=>m.id===salvo)) sel.value = salvo; else $("st-mod").value = salvo; }
+  }catch(e){
+    sel.innerHTML = '<option value="__default__">⚠️ Elenco non caricato — predefinito (' + LLM_DEFAULT_MODEL[prov] + ")</option>";
+  }
+}
+// modello da usare: campo personalizzato, altrimenti selezione, altrimenti predefinito (gestito dal motore)
+function modelloEffettivoUS(){
+  const custom = $("st-mod").value.trim();
+  const selVal = $("st-modsel").value;
+  return custom || (selVal && selVal !== "__default__" ? selVal : "");
 }
 function carregaSettings(){
   const s = getLLM();
   $("st-prov").value = s.provider || "nessuno";
-  aggiornaPlaceholder();
-  $("st-mod").value = s.model || "";
   $("st-key").value = s.key || "";
+  aggiornaModelloWrap();
   $("st-stat").textContent = s.key ? "🟢 Chiave salvata (" + s.provider + ")" : "Nessuna chiave salvata.";
 }
-$("st-prov").addEventListener("change", aggiornaPlaceholder);
+$("st-prov").addEventListener("change", aggiornaModelloWrap);
+$("st-modrl").addEventListener("click", carregaModelliUS);
 $("st-salva").addEventListener("click", ()=>{
   GM_setValue("adm_llm", JSON.stringify({
-    provider: $("st-prov").value, model: $("st-mod").value.trim(), key: $("st-key").value.trim()
+    provider: $("st-prov").value, model: modelloEffettivoUS(), key: $("st-key").value.trim()
   }));
   carregaSettings(); toast("Impostazioni salvate");
 });
@@ -1420,7 +1482,7 @@ $("st-test").addEventListener("click", async ()=>{
   const keyT = $("st-key").value.trim();
   const provT = $("st-prov").value;
   if (provT === "nessuno" || !keyT){ toast("Scegli provider e incolla la chiave"); return; }
-  GM_setValue("adm_llm", JSON.stringify({ provider:provT, model:$("st-mod").value.trim(), key:keyT }));
+  GM_setValue("adm_llm", JSON.stringify({ provider:provT, model:modelloEffettivoUS(), key:keyT }));
   $("st-stat").textContent = "⏳ Test in corso…";
   try{
     await chatLLM("Sei un assistente di test. Rispondi solo: OK", "Di' OK.");

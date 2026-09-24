@@ -366,21 +366,49 @@ function usaCRLultimoIncontro(){
 function carregaSettings(){
   const s = getLLM();
   $("setProvider").value = s.provider || "nessuno";
-  aggiornaModelloPlaceholder();
-  if (s.model) $("setModel").value = s.model;
   $("setKey").value = s.key || "";
+  aggiornaModelloWrap();
   $("llmStatus").textContent = s.key ? "🟢 Chiave salvata per " + s.provider : "Nessuna chiave salvata — l'app usa i sistemi procedurali.";
 }
-function aggiornaModelloPlaceholder(){
+function aggiornaModelloWrap(){
   const p = $("setProvider").value;
   const wrap = $("modelWrap");
-  if (p === "nessuno"){ wrap.style.display = "none"; }
-  else { wrap.style.display = "block"; $("setModel").placeholder = "Predefinito: " + LLM_DEFAULT_MODEL[p]; }
+  if (p === "nessuno"){ wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+  $("setModel").placeholder = "Predefinito: " + LLM_DEFAULT_MODEL[p];
+  carregaModelli();
+}
+// compila il menu a tendina con i modelli gratuiti ATTUALI (OpenRouter/Groq)
+async function carregaModelli(){
+  const prov = $("setProvider").value;
+  const sel = $("setModelSel");
+  if (prov === "nessuno") return;
+  if (prov === "huggingface"){
+    sel.innerHTML = '<option value="__default__">⚡ Predefinito: ' + LLM_DEFAULT_MODEL[prov] + " (scrivi un altro modello nel campo sotto, se serve)</option>";
+    return;
+  }
+  sel.innerHTML = '<option value="">⏳ Caricamento dell\'elenco modelli…</option>';
+  try{
+    const lista = await listaModelliFree(prov, $("setKey").value.trim());
+    if (!lista || !lista.length) throw new Error("lista vuota");
+    const salvo = (getLLM().model || "").trim();
+    let html = '<option value="__default__">⚡ ' + LLM_DEFAULT_MODEL[prov] + "</option>";
+    for (const m of lista) html += '<option value="' + esc(m.id) + '">' + esc(m.nome) + "</option>";
+    sel.innerHTML = html;
+    if (salvo){
+      if (lista.some(m=>m.id === salvo)) sel.value = salvo;
+      else $("setModel").value = salvo; // modello salvato non più in elenco: resta nel campo personalizzato
+    }
+  }catch(e){
+    sel.innerHTML = '<option value="__default__">⚠️ Elenco non caricato (offline?) — verrà usato il predefinito (' + LLM_DEFAULT_MODEL[prov] + ")</option>";
+  }
 }
 function salvaSettings(){
+  const custom = $("setModel").value.trim();
+  const selVal = $("setModelSel").value;
   const s = {
     provider: $("setProvider").value,
-    model: $("setModel").value.trim(),
+    model: custom || (selVal && selVal !== "__default__" ? selVal : ""),
     key: $("setKey").value.trim()
   };
   localStorage.setItem("adm_llm", JSON.stringify(s));
@@ -440,7 +468,8 @@ function avvio(){
   $("btnLoot").addEventListener("click", generaLoot);
   $("btnLootCR").addEventListener("click", usaCRLultimoIncontro);
   // impostazioni
-  $("setProvider").addEventListener("change", aggiornaModelloPlaceholder);
+  $("setProvider").addEventListener("change", aggiornaModelloWrap);
+  $("btnModelReload").addEventListener("click", carregaModelli);
   $("btnLLMSave").addEventListener("click", salvaSettings);
   $("btnLLMTest").addEventListener("click", testaLLM);
   $("btnLLMClear").addEventListener("click", rimuoviChiave);

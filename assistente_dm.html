@@ -369,8 +369,13 @@ Goblin 8"></textarea>
       <option value="huggingface">Hugging Face — huggingface.co (chiave gratuita)</option>
     </select>
     <div id="modelWrap" style="display:none">
-      <label>Modello (puoi cambiarlo, ci sono i suggerimenti precompilati)</label>
-      <input type="text" id="setModel" placeholder="">
+      <label>Modello — scegli dall'elenco (per OpenRouter si carica DA SOLO con i modelli gratis di oggi)</label>
+      <div class="row">
+        <div class="grow"><select id="setModelSel"></select></div>
+        <button class="btn small" id="btnModelReload" title="Ricarica l'elenco dei modelli">🔄</button>
+      </div>
+      <label>Modello personalizzato (opzionale): se vuoi un modello non in elenco, scrivilo qui — ha la precedenza</label>
+      <input type="text" id="setModel" placeholder="es. qwen/qwen3.8-27b:free">
     </div>
     <label>Chiave API</label>
     <div class="row">
@@ -899,8 +904,10 @@ const LOOT_TIERS = {
 const LOOT_VAL_TIERS = { comune:25, noncomune:200, raro:2000 };
 
 /* --- LLM: provider e modelli di default (tutti con piano gratuito) --- */
+// Nota: l'elenco dei modelli ":free" di OpenRouter ruota di mese in mese;
+// l'app carica l'elenco ATTUALE direttamente da OpenRouter (vedi scheda Impostazioni).
 const LLM_DEFAULT_MODEL = {
- openrouter: "meta-llama/llama-3.1-8b-instruct:free",
+ openrouter: "google/gemma-4-31b-it:free",
  groq: "llama-3.3-70b-versatile",
  huggingface: "mistralai/Mistral-7B-Instruct-v0.2"
 };
@@ -961,17 +968,44 @@ function fallbackCopia(testo){
   document.body.removeChild(ta);
   return Promise.resolve();
 }
-// fetch JSON con timeout (per non bloccare l'app se un'API impazzisce)
-function fetchJSON(url, ms){
+// fetch JSON con timeout (per non bloccare l'app se un'API impazzisce); accetta header opzionali
+function fetchJSON(url, ms, headers){
   ms = ms || 8000;
   return new Promise((resolve,reject)=>{
     const c = new AbortController();
     const t = setTimeout(()=>{ c.abort(); reject(new Error("timeout")); }, ms);
-    fetch(url, {signal:c.signal})
+    fetch(url, {signal:c.signal, headers: headers || {}})
       .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
       .then(j=>{ clearTimeout(t); resolve(j); })
       .catch(e=>{ clearTimeout(t); reject(e); });
   });
+}
+// elenco dei modelli attualmente gratuiti:
+// - OpenRouter: API pubblica (nessuna chiave richiesta), filtra gli ID ":free" che accettano testo in ingresso/uscita
+// - Groq: lista reale dei modelli, richiede la chiave già incollata
+async function listaModelliFree(provider, key){
+  if (provider === "openrouter"){
+    const j = await fetchJSON("https://openrouter.ai/api/v1/models", 12000);
+    const arr = Array.isArray(j) ? j : (j.data || []);
+    const out = [];
+    for (const m of arr){
+      const id = m.id || "";
+      if (!id.endsWith(":free")) continue;
+      const arch = m.architecture || {};
+      const inp = (arch.input_modalities || []).join(",");
+      const outm = (arch.output_modalities || []).join(",");
+      if (!/text/.test(inp) || !/text/.test(outm)) continue; // solo modelli di chat
+      if (/embedding|rerank|tts|transcribe|speech|caption/i.test(id)) continue;
+      const ctx = m.context_length ? " · " + Math.round(m.context_length/1000) + "K ctx" : "";
+      out.push({ id, nome: (m.name || id) + ctx });
+    }
+    return out.sort((a,b)=>a.id.localeCompare(b.id));
+  }
+  if (provider === "groq" && key){
+    const j = await fetchJSON("https://api.groq.com/openai/v1/models", 12000, {Authorization:"Bearer "+key});
+    return (j.data || []).map(m=>({id:m.id, nome:m.id})).sort((a,b)=>a.id.localeCompare(b.id));
+  }
+  return null;
 }
 
 /* ---------- 4.2 API SRD: più fonti, in ordine, con fallback locale ---------- */
@@ -1748,21 +1782,49 @@ function usaCRLultimoIncontro(){
 function carregaSettings(){
   const s = getLLM();
   $("setProvider").value = s.provider || "nessuno";
-  aggiornaModelloPlaceholder();
-  if (s.model) $("setModel").value = s.model;
   $("setKey").value = s.key || "";
+  aggiornaModelloWrap();
   $("llmStatus").textContent = s.key ? "🟢 Chiave salvata per " + s.provider : "Nessuna chiave salvata — l'app usa i sistemi procedurali.";
 }
-function aggiornaModelloPlaceholder(){
+function aggiornaModelloWrap(){
   const p = $("setProvider").value;
   const wrap = $("modelWrap");
-  if (p === "nessuno"){ wrap.style.display = "none"; }
-  else { wrap.style.display = "block"; $("setModel").placeholder = "Predefinito: " + LLM_DEFAULT_MODEL[p]; }
+  if (p === "nessuno"){ wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+  $("setModel").placeholder = "Predefinito: " + LLM_DEFAULT_MODEL[p];
+  carregaModelli();
+}
+// compila il menu a tendina con i modelli gratuiti ATTUALI (OpenRouter/Groq)
+async function carregaModelli(){
+  const prov = $("setProvider").value;
+  const sel = $("setModelSel");
+  if (prov === "nessuno") return;
+  if (prov === "huggingface"){
+    sel.innerHTML = '<option value="__default__">⚡ Predefinito: ' + LLM_DEFAULT_MODEL[prov] + " (scrivi un altro modello nel campo sotto, se serve)</option>";
+    return;
+  }
+  sel.innerHTML = '<option value="">⏳ Caricamento dell\'elenco modelli…</option>';
+  try{
+    const lista = await listaModelliFree(prov, $("setKey").value.trim());
+    if (!lista || !lista.length) throw new Error("lista vuota");
+    const salvo = (getLLM().model || "").trim();
+    let html = '<option value="__default__">⚡ ' + LLM_DEFAULT_MODEL[prov] + "</option>";
+    for (const m of lista) html += '<option value="' + esc(m.id) + '">' + esc(m.nome) + "</option>";
+    sel.innerHTML = html;
+    if (salvo){
+      if (lista.some(m=>m.id === salvo)) sel.value = salvo;
+      else $("setModel").value = salvo; // modello salvato non più in elenco: resta nel campo personalizzato
+    }
+  }catch(e){
+    sel.innerHTML = '<option value="__default__">⚠️ Elenco non caricato (offline?) — verrà usato il predefinito (' + LLM_DEFAULT_MODEL[prov] + ")</option>";
+  }
 }
 function salvaSettings(){
+  const custom = $("setModel").value.trim();
+  const selVal = $("setModelSel").value;
   const s = {
     provider: $("setProvider").value,
-    model: $("setModel").value.trim(),
+    model: custom || (selVal && selVal !== "__default__" ? selVal : ""),
     key: $("setKey").value.trim()
   };
   localStorage.setItem("adm_llm", JSON.stringify(s));
@@ -1822,7 +1884,8 @@ function avvio(){
   $("btnLoot").addEventListener("click", generaLoot);
   $("btnLootCR").addEventListener("click", usaCRLultimoIncontro);
   // impostazioni
-  $("setProvider").addEventListener("change", aggiornaModelloPlaceholder);
+  $("setProvider").addEventListener("change", aggiornaModelloWrap);
+  $("btnModelReload").addEventListener("click", carregaModelli);
   $("btnLLMSave").addEventListener("click", salvaSettings);
   $("btnLLMTest").addEventListener("click", testaLLM);
   $("btnLLMClear").addEventListener("click", rimuoviChiave);

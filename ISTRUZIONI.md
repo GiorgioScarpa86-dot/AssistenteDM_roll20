@@ -189,10 +189,23 @@ Come funziona in modo sicuro:
 1. Vai su **https://openrouter.ai** e crea un account (gratuito).
 2. Menù in alto → **"Keys"** → **"Create Key"** → copia la chiave.
 3. Nell'assistente: scheda Impostazioni → Provider **OpenRouter** → incolla la
-   chiave → il modello è già suggerito
-   (`meta-llama/llama-3.1-8b-instruct:free`, il suffisso `:free` = gratis) →
-   **📡 Testa connessione** (deve dire "Connesso") → **💾 Salva**.
-4. In PNG & Eventi spunta **"Usa LLM"** e genera.
+   chiave.
+4. **Scegli il modello dal menu a tendina**: l'app lo carica **da sola** da
+   OpenRouter ed elenca i modelli **gratuiti disponibili in questo momento**
+   (con il suffisso `:free`). Non serve ricordare nomi di modelli: scegli
+   quello con ⚡ (il predefinito) o un altro dall'elenco.
+5. **📡 Testa connessione** (deve dire "Connesso") → **💾 Salva**.
+6. In PNG & Eventi spunta **"Usa LLM"** e genera.
+
+> ⚠️ **L'elenco dei modelli gratis di OpenRouter ruota di mese in mese.**
+> Se un giorno vedi l'errore *"This model is unavailable for free"*:
+> 1. vai in Impostazioni,
+> 2. clicca il bottone **🔄** accanto al menu dei modelli per ricaricare l'elenco,
+> 3. scegli un modello diverso dalla lista,
+> 4. **Salva** di nuovo.
+> L'app ti mostra sempre l'elenco aggiornato, quindi il problema si risolve in 10 secondi.
+> *(Al momento di questa guida, confermati attivi: `google/gemma-4-31b-it:free`,
+> `qwen/qwen3.8-27b:free`, `z-ai/glm-5.2:free`.)*
 
 ### Opzione 2 — Groq (velocissimo, quota gratuita generosa)
 1. Vai su **https://console.groq.com** e crea un account (gratuito).
@@ -218,6 +231,7 @@ sistema procedurale (il PNG/imprevisto te lo dà lo stesso).
 | Problema | Soluzione |
 |---|---|
 | La pillola dice **🔴 Offline** | Non c'è internet, oppure l'API pubblica è giù in questo momento. L'app funziona lo stesso col dizionario locale: puoi continuare a usare tutto. Riaprila quando sei online. |
+| Errore LLM **"This model is unavailable for free"** | Il modello scelto non è più nell'elenco gratuito di OpenRouter (ruota di mese in mese). Vai in Impostazioni → **🔄** accanto al menu dei modelli → scegli un altro modello dall'elenco → **Salva**. |
 | Il pannello **non appare in Roll20** | 1) Ricarica la pagina (F5). 2) Clicca l'icona Tampermonkey e verifica che lo script "Assistente DM" abbia la **spunta attiva** (interruttore verde). 3) Verifica di essere su **app.roll20.net** (l'altro dominio non è coperto). |
 | L'iniziativa **non viene captata** | La regola: il tiro deve contenere la parola **"iniziativa"** o **"initiative"** (es. `/roll [1d20+4] initiative`). Se usi un'altra parola, aggiungi il combattente a mano (nome + tiro → **+ Aggiungi**). |
 | **Copiare** il testo non funziona | Alcune versioni di browser bloccano la copia in `file://`: seleziona manualmente il testo nel riquadro e fai Ctrl+C. Oppure usa l'app nel browser dopo averla caricata su un'URL http. |

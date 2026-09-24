@@ -497,8 +497,10 @@ const LOOT_TIERS = {
 const LOOT_VAL_TIERS = { comune:25, noncomune:200, raro:2000 };
 
 /* --- LLM: provider e modelli di default (tutti con piano gratuito) --- */
+// Nota: l'elenco dei modelli ":free" di OpenRouter ruota di mese in mese;
+// l'app carica l'elenco ATTUALE direttamente da OpenRouter (vedi scheda Impostazioni).
 const LLM_DEFAULT_MODEL = {
- openrouter: "meta-llama/llama-3.1-8b-instruct:free",
+ openrouter: "google/gemma-4-31b-it:free",
  groq: "llama-3.3-70b-versatile",
  huggingface: "mistralai/Mistral-7B-Instruct-v0.2"
 };

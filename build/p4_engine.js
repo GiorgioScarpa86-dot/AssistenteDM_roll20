@@ -55,17 +55,44 @@ function fallbackCopia(testo){
   document.body.removeChild(ta);
   return Promise.resolve();
 }
-// fetch JSON con timeout (per non bloccare l'app se un'API impazzisce)
-function fetchJSON(url, ms){
+// fetch JSON con timeout (per non bloccare l'app se un'API impazzisce); accetta header opzionali
+function fetchJSON(url, ms, headers){
   ms = ms || 8000;
   return new Promise((resolve,reject)=>{
     const c = new AbortController();
     const t = setTimeout(()=>{ c.abort(); reject(new Error("timeout")); }, ms);
-    fetch(url, {signal:c.signal})
+    fetch(url, {signal:c.signal, headers: headers || {}})
       .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
       .then(j=>{ clearTimeout(t); resolve(j); })
       .catch(e=>{ clearTimeout(t); reject(e); });
   });
+}
+// elenco dei modelli attualmente gratuiti:
+// - OpenRouter: API pubblica (nessuna chiave richiesta), filtra gli ID ":free" che accettano testo in ingresso/uscita
+// - Groq: lista reale dei modelli, richiede la chiave già incollata
+async function listaModelliFree(provider, key){
+  if (provider === "openrouter"){
+    const j = await fetchJSON("https://openrouter.ai/api/v1/models", 12000);
+    const arr = Array.isArray(j) ? j : (j.data || []);
+    const out = [];
+    for (const m of arr){
+      const id = m.id || "";
+      if (!id.endsWith(":free")) continue;
+      const arch = m.architecture || {};
+      const inp = (arch.input_modalities || []).join(",");
+      const outm = (arch.output_modalities || []).join(",");
+      if (!/text/.test(inp) || !/text/.test(outm)) continue; // solo modelli di chat
+      if (/embedding|rerank|tts|transcribe|speech|caption/i.test(id)) continue;
+      const ctx = m.context_length ? " · " + Math.round(m.context_length/1000) + "K ctx" : "";
+      out.push({ id, nome: (m.name || id) + ctx });
+    }
+    return out.sort((a,b)=>a.id.localeCompare(b.id));
+  }
+  if (provider === "groq" && key){
+    const j = await fetchJSON("https://api.groq.com/openai/v1/models", 12000, {Authorization:"Bearer "+key});
+    return (j.data || []).map(m=>({id:m.id, nome:m.id})).sort((a,b)=>a.id.localeCompare(b.id));
+  }
+  return null;
 }
 
 /* ---------- 4.2 API SRD: più fonti, in ordine, con fallback locale ---------- */

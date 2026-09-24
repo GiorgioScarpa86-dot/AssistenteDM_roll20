@@ -148,8 +148,13 @@ Goblin 8"></textarea>
       <option value="huggingface">Hugging Face — huggingface.co (chiave gratuita)</option>
     </select>
     <div id="modelWrap" style="display:none">
-      <label>Modello (puoi cambiarlo, ci sono i suggerimenti precompilati)</label>
-      <input type="text" id="setModel" placeholder="">
+      <label>Modello — scegli dall'elenco (per OpenRouter si carica DA SOLO con i modelli gratis di oggi)</label>
+      <div class="row">
+        <div class="grow"><select id="setModelSel"></select></div>
+        <button class="btn small" id="btnModelReload" title="Ricarica l'elenco dei modelli">🔄</button>
+      </div>
+      <label>Modello personalizzato (opzionale): se vuoi un modello non in elenco, scrivilo qui — ha la precedenza</label>
+      <input type="text" id="setModel" placeholder="es. qwen/qwen3.8-27b:free">
     </div>
     <label>Chiave API</label>
     <div class="row">

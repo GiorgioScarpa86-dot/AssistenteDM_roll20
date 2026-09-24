@@ -198,6 +198,32 @@ function parseIniziativa(testo){
   return out;
 }
 
+/* --- Elenco modelli gratuiti attuali (OpenRouter: API pubblica; Groq: con chiave) --- */
+async function listaModelliFree(provider, key){
+  if (provider === "openrouter"){
+    const j = await gmFetchJSON("https://openrouter.ai/api/v1/models", {timeout:12000});
+    const arr = Array.isArray(j) ? j : (j.data || []);
+    const out = [];
+    for (const m of arr){
+      const id = m.id || "";
+      if (!id.endsWith(":free")) continue;
+      const arch = m.architecture || {};
+      const inp = (arch.input_modalities || []).join(",");
+      const outm = (arch.output_modalities || []).join(",");
+      if (!/text/.test(inp) || !/text/.test(outm)) continue;
+      if (/embedding|rerank|tts|transcribe|speech|caption/i.test(id)) continue;
+      const ctx = m.context_length ? " · " + Math.round(m.context_length/1000) + "K ctx" : "";
+      out.push({ id, nome: (m.name || id) + ctx });
+    }
+    return out.sort((a,b)=>a.id.localeCompare(b.id));
+  }
+  if (provider === "groq" && key){
+    const j = await gmFetchJSON("https://api.groq.com/openai/v1/models", {timeout:12000, headers:{Authorization:"Bearer "+key}});
+    return (j.data || []).map(m=>({id:m.id, nome:m.id})).sort((a,b)=>a.id.localeCompare(b.id));
+  }
+  return null;
+}
+
 /* --- PNG / Eventi / Bottino: stessa logica della standalone --- */
 function generaPNGProc(){
   const fem = Math.random() < 0.5;
